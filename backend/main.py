@@ -13,9 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
-from .config import FRONTEND_ORIGIN, OPENAI_API_KEY, OPENAI_MODEL
-from .logic import analyze_selection
-from .muscle_data import BODY_MAP, BodySideKey
+from config import FRONTEND_ORIGIN, OPENAI_API_KEY, OPENAI_MODEL
+from logic import analyze_selection
+from muscle_data import BODY_MAP, BodySideKey
 
 logger = logging.getLogger(__name__)
 
