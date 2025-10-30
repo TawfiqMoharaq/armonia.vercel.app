@@ -91,21 +91,24 @@ export default function ExerciseCoach() {
     let active = true;
     const abortController = new AbortController();
 
+    // ✅ جرّب GPU ثم CPU + كل الموديلات بالترتيب
     async function createLandmarker(fileset: any) {
       let lastErr: any;
-      for (const url of MODEL_CANDIDATES) {
-        try {
-          const lm = await PoseLandmarker.createFromOptions(fileset, {
-            baseOptions: { modelAssetPath: url },
-            delegate: "GPU",
-            runningMode: "VIDEO",
-            numPoses: 1,
-          });
-          console.info("[PoseLandmarker] loaded:", url);
-          return lm;
-        } catch (e) {
-          lastErr = e;
-          console.warn("[PoseLandmarker] failed, trying next:", url, e);
+      for (const delegate of ["GPU", "CPU"] as const) {
+        for (const url of MODEL_CANDIDATES) {
+          try {
+            const lm = await PoseLandmarker.createFromOptions(fileset, {
+              baseOptions: { modelAssetPath: url },
+              delegate,
+              runningMode: "VIDEO",
+              numPoses: 1,
+            });
+            console.info("[PoseLandmarker] loaded:", delegate, url);
+            return lm;
+          } catch (e) {
+            lastErr = e;
+            console.warn("[PoseLandmarker] failed:", delegate, url, e);
+          }
         }
       }
       throw lastErr ?? new Error("Failed to load any PoseLandmarker model.");
@@ -113,6 +116,19 @@ export default function ExerciseCoach() {
 
     const initialize = async () => {
       try {
+        // ✅ فحص السياق الآمن ودعم الكاميرا قبل أي طلب
+        if (!("mediaDevices" in navigator) || !navigator.mediaDevices.getUserMedia) {
+          setCameraError("المتصفح لا يدعم getUserMedia. حدّث المتصفح أو جرّب Chrome/Edge.");
+          setInitializing(false);
+          return;
+        }
+        if (!window.isSecureContext) {
+          setCameraError("هذه الصفحة ليست آمنة (HTTPS مطلوب). استخدم https أو localhost.");
+          setInitializing(false);
+          return;
+        }
+
+        // WASM ثم الموديل
         const fileset = await FilesetResolver.forVisionTasks(WASM_BASE_URL);
         if (!active) return;
 
@@ -133,7 +149,7 @@ export default function ExerciseCoach() {
         const canvas = canvasRef.current;
         if (!video || !canvas) {
           stream.getTracks().forEach((t)=>t.stop());
-          setCameraError("Unable to initialize camera resources. Please refresh and try again.");
+          setCameraError("تعذر تهيئة مكونات العرض. أعد تحميل الصفحة.");
           return;
         }
 
@@ -141,7 +157,7 @@ export default function ExerciseCoach() {
         try { await video.play(); } catch { /* بعض المتصفحات تمنع autoplay */ }
 
         const ctx = canvas.getContext("2d");
-        if (!ctx) { setCameraError("Canvas context is not available."); return; }
+        if (!ctx) { setCameraError("Canvas context غير متاح."); return; }
 
         const drawingUtils = new DrawingUtils(ctx);
 
@@ -222,6 +238,7 @@ export default function ExerciseCoach() {
 
         renderLoop();
       } catch (error: any) {
+        console.error("[ExerciseCoach] initialize() failed:", error);
         setCameraError(error?.message ?? "تعذر بدء تشغيل المدرب.");
         setInitializing(false);
       }
@@ -261,7 +278,7 @@ export default function ExerciseCoach() {
 
       {(initializing || cameraError) && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
-          <p className="text-sm leading-relaxed">
+          <p className="text-sm leading-relaxed" dir="rtl">
             {cameraError ?? "جاري تشغيل الكاميرا ومدرب الوضعيات...\nاسمح بإذن الكاميرا وابقَ ثابتاً."}
           </p>
         </div>
