@@ -6,14 +6,14 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
-// ✅ مسارات مرشّحة للنموذج (نجرّب بالتسلسل)
+// ✅ نحاول عدة نماذج تلقائياً (لتجنب 404 أو عدم دعم float16)
 const MODEL_CANDIDATES = [
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/latest/pose_landmarker_lite.task",
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float32/latest/pose_landmarker_full.task",
 ];
 
-// ✅ مسار WASM ثابت (لا تستخدم rc)
+// ✅ إصدار ثابت للـ WASM (لا تستخدم rc)
 const WASM_BASE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
 
 const KNEE_UP_THRESHOLD = 160;
@@ -23,7 +23,7 @@ const BACK_SAFE_THRESHOLD = 150;
 
 type AngleSample = { knee: number; back: number };
 
-function toDegrees(r: number) { return (r * 180) / Math.PI; }
+function toDeg(r: number) { return (r * 180) / Math.PI; }
 function vectorAngle(a: NormalizedLandmark, c: NormalizedLandmark, b: NormalizedLandmark) {
   const v1 = [a.x - c.x, a.y - c.y, a.z - c.z];
   const v2 = [b.x - c.x, b.y - c.y, b.z - c.z];
@@ -32,7 +32,7 @@ function vectorAngle(a: NormalizedLandmark, c: NormalizedLandmark, b: Normalized
   const m2 = Math.hypot(v2[0], v2[1], v2[2]);
   if (!m1 || !m2) return null;
   const cos = Math.min(Math.max(dot / (m1 * m2), -1), 1);
-  return toDegrees(Math.acos(cos));
+  return toDeg(Math.acos(cos));
 }
 function pickLeg(lms: NormalizedLandmark[]) {
   const L = { shoulder: 11, hip: 23, knee: 25, ankle: 27 };
@@ -41,6 +41,36 @@ function pickLeg(lms: NormalizedLandmark[]) {
   return score(L) >= score(R) ? L : R;
 }
 function clampInt(v: number | null) { return v==null||Number.isNaN(v)?null:Math.round(v); }
+
+// ====== كاميرا: محاولات مرنة + رسائل واضحة ======
+async function getCameraStream(): Promise<MediaStream> {
+  const trials: MediaStreamConstraints[] = [
+    { video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } } },
+    { video: { width: { ideal: 960 }, height: { ideal: 720 } } },
+    { video: true },
+  ];
+  let lastErr: any;
+  for (const c of trials) {
+    try { return await navigator.mediaDevices.getUserMedia(c); }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+function explainGetUserMediaError(err: any): string {
+  const n = err?.name || "";
+  switch (n) {
+    case "NotAllowedError":
+    case "PermissionDeniedError": return "تم رفض إذن الكاميرا. اسمح بالوصول من شريط العنوان ثم أعد المحاولة.";
+    case "NotFoundError":
+    case "DevicesNotFoundError": return "لم يتم العثور على كاميرا. تأكد من توصيل الكاميرا أو اختيار الجهاز الصحيح.";
+    case "NotReadableError":
+    case "TrackStartError": return "لا يمكن فتح الكاميرا (قد تكون مستخدمة من تطبيق آخر). أغلق التطبيقات الأخرى ثم جرّب.";
+    case "OverconstrainedError": return "إعدادات الكاميرا غير مدعومة على هذا الجهاز. تم تقليل المتطلبات، حدّث الصفحة.";
+    case "SecurityError": return "الوصول للكاميرا يتطلب اتصالاً آمناً (HTTPS).";
+    case "AbortError": return "تعذر بدء تشغيل الكاميرا بسبب خطأ داخلي.";
+    default: return `تعذر تشغيل الكاميرا: ${n || "خطأ غير متوقع"}`;
+  }
+}
 
 export default function ExerciseCoach() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -89,21 +119,26 @@ export default function ExerciseCoach() {
         poseRef.current = await createLandmarker(fileset);
         if (!active) return;
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
-        });
+        // الكاميرا مع محاولات fallback
+        let stream: MediaStream;
+        try { stream = await getCameraStream(); }
+        catch (e) {
+          setCameraError(explainGetUserMediaError(e));
+          setInitializing(false);
+          return;
+        }
         if (!active) { stream.getTracks().forEach(t=>t.stop()); return; }
 
         const video = videoRef.current;
         const canvas = canvasRef.current;
         if (!video || !canvas) {
-          stream.getTracks().forEach(t=>t.stop());
+          stream.getTracks().forEach((t)=>t.stop());
           setCameraError("Unable to initialize camera resources. Please refresh and try again.");
           return;
         }
 
         video.srcObject = stream;
-        await video.play();
+        try { await video.play(); } catch { /* بعض المتصفحات تمنع autoplay */ }
 
         const ctx = canvas.getContext("2d");
         if (!ctx) { setCameraError("Canvas context is not available."); return; }
@@ -187,7 +222,7 @@ export default function ExerciseCoach() {
 
         renderLoop();
       } catch (error: any) {
-        setCameraError(error?.message ?? "Unexpected error while starting the camera feed.");
+        setCameraError(error?.message ?? "تعذر بدء تشغيل المدرب.");
         setInitializing(false);
       }
     };
@@ -227,7 +262,7 @@ export default function ExerciseCoach() {
       {(initializing || cameraError) && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
           <p className="text-sm leading-relaxed">
-            {cameraError ?? "Starting camera and pose coach...\nGrant camera access and hold steady."}
+            {cameraError ?? "جاري تشغيل الكاميرا ومدرب الوضعيات...\nاسمح بإذن الكاميرا وابقَ ثابتاً."}
           </p>
         </div>
       )}
