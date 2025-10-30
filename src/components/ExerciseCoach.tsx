@@ -14,8 +14,16 @@ const MODEL_CANDIDATES = [
 ];
 
 // ✅ إصدار ثابت للـ WASM (لا تستخدم rc)
-const WASM_BASE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
+// بدّل الـCDN
+const WASM_BASE_URL =
+  "https://unpkg.com/@mediapipe/tasks-vision@0.10.22/wasm";
 
+// ثبّت مسارات الموديلات لنسخة محددة (1) بدل latest
+const MODEL_CANDIDATES = [
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/1/pose_landmarker_lite.task",
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float32/1/pose_landmarker_full.task",
+];
 const KNEE_UP_THRESHOLD = 160;
 const KNEE_DOWN_MIN = 70;
 const KNEE_DOWN_MAX = 100;
