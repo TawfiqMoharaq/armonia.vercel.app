@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import ChatBox from "../components/ChatBox";
+import ExerciseCard from "../components/ExerciseCard";
 import type { MuscleContext } from "../lib/api";
 import { analyzeSelection } from "../lib/api";
 import { BODY_MAPS, type BodyMapItem, type BodySideKey } from "../data/bodyMaps";
+import { getExercisesByMuscle } from "../data/exercises";
 
 interface CircleSelection {
   cx: number;
@@ -12,22 +14,22 @@ interface CircleSelection {
   radius: number;
 }
 
-const HEADLINE = "\u062d\u062f\u0651\u062f \u0645\u0648\u0636\u0639 \u0627\u0644\u0625\u0632\u0639\u0627\u062c \u0628\u062f\u0642\u0651\u0629";
+const HEADLINE = "حدّد موضع الإزعاج بدقّة";
 const INTRO_TEXT =
-  "\u0627\u062e\u062a\u0631 \u0627\u0644\u062c\u0647\u0629 \u0627\u0644\u0623\u0645\u0627\u0645\u064a\u0629 \u0623\u0648 \u0627\u0644\u062e\u0644\u0641\u064a\u0629 \u062b\u0645 \u0627\u0636\u063a\u0637 \u0639\u0644\u0649 \u0627\u0644\u0635\u0648\u0631\u0629 \u0644\u062a\u062d\u062f\u064a\u062f \u0645\u0643\u0627\u0646 \u0627\u0644\u0625\u0632\u0639\u0627\u062c. \u063a\u064a\u0651\u0631 \u062d\u062c\u0645 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 \u0625\u0630\u0627 \u0627\u062d\u062a\u062c\u062a\u060c \u0648\u0633\u064a\u062d\u0627\u0648\u0644 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0642\u062a\u0631\u0627\u062d \u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0623\u0642\u0631\u0628 \u0644\u062a\u0642\u062f\u064a\u0645 \u0646\u0635\u0627\u0626\u062d \u0648\u062a\u0645\u0627\u0631\u064a\u0646 \u0645\u0646\u0627\u0633\u0628\u0629.";
-const RESULTS_TITLE = "\u0623\u0642\u0631\u0628 \u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0645\u062a\u0623\u062b\u0631\u0629";
+  "اختر الجهة الأمامية أو الخلفية ثم اضغط على الصورة لتحديد مكان الإزعاج. غيّر حجم الدائرة إذا احتجت، وسيحاول النظام اقتراح العضلات الأقرب لتقديم نصائح وتمارين مناسبة.";
+const RESULTS_TITLE = "أقرب العضلات المتأثرة";
 const ERROR_MESSAGE =
-  "\u062a\u0639\u0630\u0651\u0631 \u062a\u062d\u062f\u064a\u062f \u0627\u0644\u0639\u0636\u0644\u0629 \u0628\u062f\u0642\u0651\u0629\u060c \u062c\u0631\u0651\u0628 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649 \u0623\u0648 \u0635\u063a\u0651\u0631 \u0627\u0644\u062f\u0627\u0626\u0631\u0629.";
-const RADIUS_LABEL = "\u0642\u0637\u0631 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 (% \u0645\u0646 \u0627\u0644\u0635\u0648\u0631\u0629):";
+  "تعذّر تحديد العضلة بدقّة، جرّب مرة أخرى أو صغّر الدائرة.";
+const RADIUS_LABEL = "قطر الدائرة (% من الصورة):";
 const RADIUS_HINT =
-  "\u0627\u0636\u063a\u0637 \u0639\u0644\u0649 \u0627\u0644\u0635\u0648\u0631\u0629 \u0644\u062a\u063a\u064a\u064a\u0631 \u0645\u0631\u0643\u0632 \u0627\u0644\u062f\u0627\u0626\u0631\u0629. \u0625\u0646 \u0643\u0627\u0646\u062a \u0627\u0644\u0646\u062a\u0627\u0626\u062c \u063a\u064a\u0631 \u062f\u0642\u064a\u0642\u0629\u060c \u062d\u0631\u0651\u0643 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 \u0623\u0648 \u0635\u063a\u0651\u0631 \u0646\u0635\u0641 \u0627\u0644\u0642\u0637\u0631 \u0644\u0625\u0639\u0627\u062f\u0629 \u0627\u0644\u062a\u062d\u0644\u064a\u0644.";
-const LOADING_LABEL = "\u064a\u062a\u0645 \u0627\u0644\u062a\u062d\u0644\u064a\u0644";
+  "اضغط على الصورة لتغيير مركز الدائرة. إن كانت النتائج غير دقيقة، حرّك الدائرة أو صغّر نصف القطر لإعادة التحليل.";
+const LOADING_LABEL = "يتم التحليل";
 const EMPTY_HINT =
-  "\u062d\u0631\u0651\u0643 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 \u0644\u062a\u062d\u062f\u064a\u062f \u0645\u0648\u0636\u0639 \u0623\u0648\u0636\u062d\u060c \u062b\u0645 \u0633\u062a\u0638\u0647\u0631 \u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0645\u062d\u062a\u0645\u0644\u0629 \u0647\u0646\u0627.";
+  "حرّك الدائرة لتحديد موضع أوضح، ثم ستظهر العضلات المحتملة هنا.";
 
 const SIDE_LABELS: Record<BodySideKey, string> = {
-  front: "\u0627\u0644\u062c\u0632\u0621 \u0627\u0644\u0623\u0645\u0627\u0645\u064a",
-  back: "\u0627\u0644\u062c\u0632\u0621 \u0627\u0644\u062e\u0644\u0641\u064a",
+  front: "الجزء الأمامي",
+  back: "الجزء الخلفي",
 };
 
 const BADGE_CLASSES = ["border-[#0A6D8B]", "border-[#18A4B8]", "border-[#7C3AED]"];
@@ -59,6 +61,7 @@ export default function Diagnosis() {
   const [error, setError] = useState<string | null>(null);
   const [painLevel, setPainLevel] = useState<(typeof PAIN_LEVELS)[number]["value"]>("moderate");
   const [intensityLevel, setIntensityLevel] = useState<(typeof INTENSITY_LEVELS)[number]["value"]>("moderate");
+  const [selectedMuscle, setSelectedMuscle] = useState<string>("");
 
   const computeFallbackResults = (sideKey: BodySideKey, selection: CircleSelection): MuscleContext[] => {
     const mapData = BODY_MAPS[sideKey];
@@ -158,6 +161,18 @@ export default function Diagnosis() {
 
   const rankedResults = useMemo(() => results.slice(0, 2), [results]);
 
+  useEffect(() => {
+    if (selectedMuscle) {
+      return;
+    }
+    const hasThigh = rankedResults.some((item) =>
+      (item.muscle_en ?? "").toLowerCase().includes("thigh")
+    );
+    if (hasThigh) {
+      setSelectedMuscle("thighs");
+    }
+  }, [rankedResults, selectedMuscle]);
+
   const resultWithMeta = useMemo(
     () =>
       rankedResults.map((item) => ({
@@ -178,7 +193,7 @@ export default function Diagnosis() {
 
   const autoStartPrompt = useMemo(() => {
     const muscleSnippet = rankedResults.length
-      ? `\u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0645\u062d\u062f\u062f\u0629: ${rankedResults
+      ? `العضلات المحددة: ${rankedResults
           .slice(0, 3)
           .map((muscle) => muscle.muscle_ar)
           .join("، ")}. `
@@ -186,6 +201,12 @@ export default function Diagnosis() {
 
     return `مستوى الألم: ${painLabel}. مستوى شدة التمرين المطلوب: ${intensityLabel}. ${muscleSnippet}أعطني نصائح وتمارين مختصرة تراعي هذه المعطيات وتأكد من تذكيري بالسلامة.`;
   }, [painLabel, intensityLabel, rankedResults]);
+
+  const showThighExercises = selectedMuscle.toLowerCase() === "thighs";
+  const thighExercises = useMemo(
+    () => (showThighExercises ? getExercisesByMuscle("thighs") : []),
+    [showThighExercises]
+  );
 
   return (
     <div className="bg-[#F7FAFC] min-h-screen flex flex-col justify-between">
@@ -215,7 +236,7 @@ export default function Diagnosis() {
         <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="bg-white border rounded-2xl shadow px-6 py-6">
             <h2 className="text-lg font-semibold text-[#0A6D8B] mb-4">
-              {"\u062d\u062f\u062f \u0645\u0648\u0636\u0639 \u0627\u0644\u062f\u0627\u0626\u0631\u0629"}
+              {"حدد موضع الدائرة"}
             </h2>
             <div className="space-y-4">
               <div className="relative w-full max-w-[420px] mx-auto" style={{ aspectRatio: "2 / 3" }}>
@@ -353,7 +374,7 @@ export default function Diagnosis() {
                   <div>
                     <p className="font-semibold text-[#0A6D8B]">{data.muscle_ar}</p>
                     <p className="text-xs text-gray-500">{data.muscle_en}</p>
-                    <p className="text-xs text-gray-400 mt-1">{"\u0627\u0644\u0645\u0646\u0637\u0642\u0629: "} {data.region}</p>
+                    <p className="text-xs text-gray-400 mt-1">{"المنطقة: "} {data.region}</p>
                   </div>
                   <span className="text-[#18A4B8] font-semibold">{Math.round(data.prob * 100)}%</span>
                 </li>
@@ -369,6 +390,39 @@ export default function Diagnosis() {
             autoStartPrompt={autoStartPrompt}
             sessionKey={`${painLevel}-${intensityLevel}`}
           />
+        </div>
+
+        <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-4" dir="rtl">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-700">حدد العضلة</label>
+            <select
+              value={selectedMuscle}
+              onChange={(event) => setSelectedMuscle(event.target.value)}
+              className="border px-3 py-2 rounded-xl bg-transparent focus:outline-none focus:ring-2 focus:ring-[#0A6D8B]"
+            >
+              <option value="">— اختر —</option>
+              <option value="thighs">الفخذ</option>
+            </select>
+          </div>
+
+          {showThighExercises && (
+            <>
+              <div className="p-4 border rounded-3xl bg-[#F8FAFC]">
+                <h2 className="text-xl font-bold mb-2 text-[#0A6D8B]">نصائح للفخذ</h2>
+                <ul className="list-disc ms-5 text-sm text-gray-700 space-y-1">
+                  <li>ابدأ بإحماء خفيف</li>
+                  <li>لا تتجاهل الألم الحاد</li>
+                  <li>حافظ على استقامة الظهر</li>
+                </ul>
+              </div>
+
+              <div className="space-y-4">
+                {thighExercises.map((exercise) => (
+                  <ExerciseCard key={exercise.id} exercise={exercise} />
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </section>
 
