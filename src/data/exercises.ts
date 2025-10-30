@@ -16,7 +16,7 @@ export const EXERCISES: Exercise[] = [
     aliases: ["سكوات","Squat","Bodyweight Squat"],
     muscleGroup: ["thighs","quads","glutes"],
     tips: ["ثبّت الكعبين","ادفع الوركين للخلف","ظهر محايد","انزل ببطء واصعد بتحكم"],
-    gif: "/src/assets/squat.gif",
+    gif: "/gifs/squat.gif", 
     coachType: "squat"
   },
   // ... تقدر تزيد لاحقًا Lunges, Glute Bridge, ...
