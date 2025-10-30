@@ -1,2 +1,0 @@
-"""Armonia coaching backend package."""
-
