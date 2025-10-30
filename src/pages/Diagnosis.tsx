@@ -4,7 +4,15 @@ import Footer from "../components/Footer";
 import ChatBox from "../components/ChatBox";
 import type { MuscleContext } from "../lib/api";
 import { analyzeSelection } from "../lib/api";
-import { BODY_MAPS, type BodyMapItem, type BodySideKey } from "../data/bodyMaps";
+import { BODY_MAPS, type BodySideKey } from "../data/bodyMaps";
+
+// ✅ إضافات: مرجع التمارين + بطاقة العرض
+import ExerciseCard from "../components/ExerciseCard";
+import {
+  getExercisesByMuscle,
+  findExerciseByName,
+  type Exercise,
+} from "../data/exercises";
 
 interface CircleSelection {
   cx: number;
@@ -12,22 +20,22 @@ interface CircleSelection {
   radius: number;
 }
 
-const HEADLINE = "\u062d\u062f\u0651\u062f \u0645\u0648\u0636\u0639 \u0627\u0644\u0625\u0632\u0639\u0627\u062c \u0628\u062f\u0642\u0651\u0629";
+const HEADLINE = "حدّد موضع الإزعاج بدقّة";
 const INTRO_TEXT =
-  "\u0627\u062e\u062a\u0631 \u0627\u0644\u062c\u0647\u0629 \u0627\u0644\u0623\u0645\u0627\u0645\u064a\u0629 \u0623\u0648 \u0627\u0644\u062e\u0644\u0641\u064a\u0629 \u062b\u0645 \u0627\u0636\u063a\u0637 \u0639\u0644\u0649 \u0627\u0644\u0635\u0648\u0631\u0629 \u0644\u062a\u062d\u062f\u064a\u062f \u0645\u0643\u0627\u0646 \u0627\u0644\u0625\u0632\u0639\u0627\u062c. \u063a\u064a\u0651\u0631 \u062d\u062c\u0645 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 \u0625\u0630\u0627 \u0627\u062d\u062a\u062c\u062a\u060c \u0648\u0633\u064a\u062d\u0627\u0648\u0644 \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0642\u062a\u0631\u0627\u062d \u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0623\u0642\u0631\u0628 \u0644\u062a\u0642\u062f\u064a\u0645 \u0646\u0635\u0627\u0626\u062d \u0648\u062a\u0645\u0627\u0631\u064a\u0646 \u0645\u0646\u0627\u0633\u0628\u0629.";
-const RESULTS_TITLE = "\u0623\u0642\u0631\u0628 \u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0645\u062a\u0623\u062b\u0631\u0629";
+  "اختر الجهة الأمامية أو الخلفية ثم اضغط على الصورة لتحديد مكان الإزعاج. غيّر حجم الدائرة إذا احتجت، وسيحاول النظام اقتراح العضلات الأقرب لتقديم نصائح وتمارين مناسبة.";
+const RESULTS_TITLE = "أقرب العضلات المتأثرة";
 const ERROR_MESSAGE =
-  "\u062a\u0639\u0630\u0651\u0631 \u062a\u062d\u062f\u064a\u062f \u0627\u0644\u0639\u0636\u0644\u0629 \u0628\u062f\u0642\u0651\u0629\u060c \u062c\u0631\u0651\u0628 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649 \u0623\u0648 \u0635\u063a\u0651\u0631 \u0627\u0644\u062f\u0627\u0626\u0631\u0629.";
-const RADIUS_LABEL = "\u0642\u0637\u0631 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 (% \u0645\u0646 \u0627\u0644\u0635\u0648\u0631\u0629):";
+  "تعذّر تحديد العضلة بدقّة، جرّب مرة أخرى أو صغّر الدائرة.";
+const RADIUS_LABEL = "قطر الدائرة (% من الصورة):";
 const RADIUS_HINT =
-  "\u0627\u0636\u063a\u0637 \u0639\u0644\u0649 \u0627\u0644\u0635\u0648\u0631\u0629 \u0644\u062a\u063a\u064a\u064a\u0631 \u0645\u0631\u0643\u0632 \u0627\u0644\u062f\u0627\u0626\u0631\u0629. \u0625\u0646 \u0643\u0627\u0646\u062a \u0627\u0644\u0646\u062a\u0627\u0626\u062c \u063a\u064a\u0631 \u062f\u0642\u064a\u0642\u0629\u060c \u062d\u0631\u0651\u0643 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 \u0623\u0648 \u0635\u063a\u0651\u0631 \u0646\u0635\u0641 \u0627\u0644\u0642\u0637\u0631 \u0644\u0625\u0639\u0627\u062f\u0629 \u0627\u0644\u062a\u062d\u0644\u064a\u0644.";
-const LOADING_LABEL = "\u064a\u062a\u0645 \u0627\u0644\u062a\u062d\u0644\u064a\u0644";
+  "اضغط على الصورة لتغيير مركز الدائرة. إن كانت النتائج غير دقيقة، حرّك الدائرة أو صغّر نصف القطر لإعادة التحليل.";
+const LOADING_LABEL = "يتم التحليل";
 const EMPTY_HINT =
-  "\u062d\u0631\u0651\u0643 \u0627\u0644\u062f\u0627\u0626\u0631\u0629 \u0644\u062a\u062d\u062f\u064a\u062f \u0645\u0648\u0636\u0639 \u0623\u0648\u0636\u062d\u060c \u062b\u0645 \u0633\u062a\u0638\u0647\u0631 \u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0645\u062d\u062a\u0645\u0644\u0629 \u0647\u0646\u0627.";
+  "حرّك الدائرة لتحديد موضع أوضح، ثم ستظهر العضلات المحتملة هنا.";
 
 const SIDE_LABELS: Record<BodySideKey, string> = {
-  front: "\u0627\u0644\u062c\u0632\u0621 \u0627\u0644\u0623\u0645\u0627\u0645\u064a",
-  back: "\u0627\u0644\u062c\u0632\u0621 \u0627\u0644\u062e\u0644\u0641\u064a",
+  front: "الجزء الأمامي",
+  back: "الجزء الخلفي",
 };
 
 const BADGE_CLASSES = ["border-[#0A6D8B]", "border-[#18A4B8]", "border-[#7C3AED]"];
@@ -62,9 +70,7 @@ export default function Diagnosis() {
 
   const computeFallbackResults = (sideKey: BodySideKey, selection: CircleSelection): MuscleContext[] => {
     const mapData = BODY_MAPS[sideKey];
-    if (!mapData) {
-      return [];
-    }
+    if (!mapData) return [];
     const entries = mapData.items.map((item) => {
       const [x1, y1, x2, y2] = item.box_norm;
       const centerX = (x1 + x2) / 2;
@@ -74,9 +80,7 @@ export default function Diagnosis() {
     });
     entries.sort((a, b) => a.dist - b.dist);
     const top = entries.slice(0, 5);
-    if (!top.length) {
-      return [];
-    }
+    if (!top.length) return [];
     const weightSum = top.reduce((sum, current) => sum + 1 / (current.dist + 1e-6), 0);
     return top.map(({ item, dist }) => ({
       muscle_ar: item.name_ar,
@@ -94,10 +98,7 @@ export default function Diagnosis() {
       setLoading(true);
       setError(null);
       try {
-        const response = await analyzeSelection({
-          side,
-          circle: selection,
-        });
+        const response = await analyzeSelection({ side, circle: selection });
         if (!cancelled) {
           if (response.results.length) {
             setResults(response.results);
@@ -119,9 +120,7 @@ export default function Diagnosis() {
           }
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
@@ -178,14 +177,28 @@ export default function Diagnosis() {
 
   const autoStartPrompt = useMemo(() => {
     const muscleSnippet = rankedResults.length
-      ? `\u0627\u0644\u0639\u0636\u0644\u0627\u062a \u0627\u0644\u0645\u062d\u062f\u062f\u0629: ${rankedResults
-          .slice(0, 3)
-          .map((muscle) => muscle.muscle_ar)
-          .join("، ")}. `
+      ? `العضلات المحددة: ${rankedResults.slice(0, 3).map((m) => m.muscle_ar).join("، ")}. `
       : "";
-
-    return `مستوى الألم: ${painLabel}. مستوى شدة التمرين المطلوب: ${intensityLabel}. ${muscleSnippet}أعطني نصائح وتمارين مختصرة تراعي هذه المعطيات وتأكد من تذكيري بالسلامة.`;
+    return `مستوى الألم: ${painLabel}. مستوى شدة التمرين المطلوب: ${intensityLabel}. ${muscleSnippet}أعطني نصائح وتمارين مختصرة تراعي هذه المعطيات وتأكد من تذكيري بالسلامة. إذا رشّحت تمرينًا فاكتب اسمه داخل JSON بالحقل "exercise".`;
   }, [painLabel, intensityLabel, rankedResults]);
+
+  // ===== تلقائي: نختار تمرين الفخذ إذا كانت ضمن أعلى العضلات =====
+  const isThighsLikely = useMemo(
+    () => rankedResults.some((r) => (r.muscle_en ?? "").toLowerCase().includes("thigh")),
+    [rankedResults]
+  );
+  const defaultExercise: Exercise | null = useMemo(() => {
+    if (!isThighsLikely) return null;
+    const list = getExercisesByMuscle("thighs");
+    return list.length ? list[0] : null; // Bodyweight Squat عادة
+  }, [isThighsLikely]);
+
+  // التمرين الذي سنعرضه تحت الشات (افتراضي أو من الشات)
+  const [recommended, setRecommended] = useState<Exercise | null>(null);
+  useEffect(() => {
+    // كل ما تغيّرت نتائج المجسّم نرجّع الافتراضي (لو ما فيه اقتراح من الشات)
+    if (!recommended) setRecommended(defaultExercise);
+  }, [defaultExercise, recommended]);
 
   return (
     <div className="bg-[#F7FAFC] min-h-screen flex flex-col justify-between">
@@ -193,7 +206,7 @@ export default function Diagnosis() {
 
       <section className="max-w-5xl mx-auto p-6 space-y-8" dir="rtl">
         <header className="text-center space-y-3">
-          <h1 className="text-2xl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
+          <h1 className="text-زxl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
           <p className="text-gray-600 text-sm md:text-base">{INTRO_TEXT}</p>
         </header>
 
@@ -213,14 +226,13 @@ export default function Diagnosis() {
         </div>
 
         <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+          {/* المجسّم */}
           <div className="bg-white border rounded-2xl shadow px-6 py-6">
-            <h2 className="text-lg font-semibold text-[#0A6D8B] mb-4">
-              {"\u062d\u062f\u062f \u0645\u0648\u0636\u0639 \u0627\u0644\u062f\u0627\u0626\u0631\u0629"}
-            </h2>
+            <h2 className="text-lg font-semibold text-[#0A6D8B] mb-4">حدد موضع الدائرة</h2>
             <div className="space-y-4">
               <div className="relative w-full max-w-[420px] mx-auto" style={{ aspectRatio: "2 / 3" }}>
                 <img
-                  src={map.image}
+                  src={BODY_MAPS[side].image}
                   alt={SIDE_LABELS[side]}
                   className="absolute inset-0 h-full w-full object-contain select-none pointer-events-none"
                 />
@@ -243,13 +255,8 @@ export default function Diagnosis() {
                       <div
                         key={data.muscle_en}
                         className={`absolute border-2 ${badgeCls} rounded-full pointer-events-none bg-[#0A6D8B]/10`}
-                        style={{
-                          left: `${left}%`,
-                          top: `${top}%`,
-                          width: `${size}%`,
-                          height: `${size}%`,
-                        }}
-                      ></div>
+                        style={{ left: `${left}%`, top: `${top}%`, width: `${size}%`, height: `${size}%` }}
+                      />
                     );
                   })}
                 </div>
@@ -276,6 +283,7 @@ export default function Diagnosis() {
             </div>
           </div>
 
+          {/* لوحة التحكم اليمنى */}
           <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-5">
             <div>
               <h2 className="text-lg font-semibold text-[#0A6D8B] mb-3">مستوى الألم الحالي</h2>
@@ -326,6 +334,7 @@ export default function Diagnosis() {
             </div>
           </div>
 
+          {/* قائمة أقرب العضلات */}
           <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-[#0A6D8B]">{RESULTS_TITLE}</h2>
@@ -353,22 +362,40 @@ export default function Diagnosis() {
                   <div>
                     <p className="font-semibold text-[#0A6D8B]">{data.muscle_ar}</p>
                     <p className="text-xs text-gray-500">{data.muscle_en}</p>
-                    <p className="text-xs text-gray-400 mt-1">{"\u0627\u0644\u0645\u0646\u0637\u0642\u0629: "} {data.region}</p>
+                    <p className="text-xs text-gray-400 mt-1">{"المنطقة: "} {data.region}</p>
                   </div>
-                  <span className="text-[#18A4B8] font-semibold">{Math.round(data.prob * 100)}%</span>
+                  <span className="text-[#18A4B8] font-semibold">
+                    {Math.round((data.prob ?? 0) * 100)}%
+                  </span>
                 </li>
               ))}
             </ul>
           </div>
         </div>
 
-        <div className="bg-white border rounded-2xl shadow px-6 py-6">
+        {/* ✅ كرت الشات + التمرين المدمج تحته تلقائيًا */}
+        <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-4">
           <ChatBox
             musclesContext={rankedResults}
             autoStartAdvice
             autoStartPrompt={autoStartPrompt}
             sessionKey={`${painLevel}-${intensityLevel}`}
+            // ✅ إذا ذكر الشات تمرينًا بالاسم (سكوات/ثايز...) نعرضه فورًا
+            onSuggestedExercise={(name) => {
+              const hit = findExerciseByName(name) || defaultExercise || null;
+              setRecommended(hit);
+            }}
           />
+
+          {recommended && (
+            <>
+              <hr className="border-gray-200" />
+              <h3 className="text-base md:text-lg font-semibold text-[#0A6D8B]">
+                تمرين مقترح بناءً على اختيارك:
+              </h3>
+              <ExerciseCard exercise={recommended} />
+            </>
+          )}
         </div>
       </section>
 
