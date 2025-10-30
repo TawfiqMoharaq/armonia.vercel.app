@@ -17,6 +17,9 @@ interface ChatBoxProps {
   autoStartAdvice?: boolean;
   autoStartPrompt?: string;
   sessionKey?: string;
+
+  /** ✅ جديد: يُستدعى عندما نكتشف أن الردّ يقترح تمرينًا بالاسم */
+  onSuggestedExercise?: (name: string) => void;
 }
 
 // ===================== النصوص =====================
@@ -87,7 +90,7 @@ const buildYoutube = (muscles?: MuscleContext[]): string => {
 };
 
 /**
- * يحوّل النص إلى فقرات وروابط قابلة للنقر.
+ * يطبع النص كرابط إن وجد
  */
 const linkifyText = (text: string): ReactNode[] => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -180,8 +183,6 @@ const renderWithLinks = (content: string) => {
 
 /**
  * Timeout + Retry لنداء sendChat حتى ما يعلق وتطلع رسالة “الخدمة معلّقة”.
- * - timeoutMs: مهلة الانتظار قبل اعتبار الطلب منتهٍ.
- * - retries: عدد المحاولات الإضافية عند الفشل الشبكي.
  */
 async function sendChatWithTimeout(
   payload: ChatPayload,
@@ -193,7 +194,6 @@ async function sendChatWithTimeout(
     const t = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      // ملاحظة: إذا كانت sendChat لا تدعم AbortController داخلياً، سيُرمى خطأ على الأقل في محاولة `fetch`.
       const res = await sendChat(payload);
       clearTimeout(t);
       return res;
@@ -202,15 +202,90 @@ async function sendChatWithTimeout(
       const isLast = attempt === retries;
       const isAbort = err?.name === "AbortError";
       if (isLast) {
-        // ارْم الخطأ النهائي
         throw isAbort ? new Error("timeout") : err;
       }
-      // حاول مجدداً
-      await new Promise((r) => setTimeout(r, 400)); // وقفة قصيرة قبل إعادة المحاولة
+      await new Promise((r) => setTimeout(r, 400));
     }
   }
-  // لن نصل هنا
   throw new Error("unknown");
+}
+
+/** ===================== استخراج اسم التمرين من ردّ الشات ===================== */
+/** توحيد خفيف للنص العربي/الإنجليزي */
+const norm = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\u0600-\u06FF\w\s\-_:()]/g, "") // إزالة رموز مزعجة
+    .replace(/ى|ي/g, "ي")
+    .replace(/ة/g, "ه")
+    .trim();
+
+/** مرشّحات سريعة لأسماء شائعة – تقدر تزودها لاحقًا */
+const EXERCISE_HINTS = [
+  "سكوات",
+  "squat",
+  "bodyweight squat",
+  "lunge",
+  "لانجز",
+  "glute bridge",
+  "جسر المؤخره",
+  "leg extension",
+  "hamstring curl",
+];
+
+/**
+ * يحاول استخراج اسم تمرين من نص الرد بطرق متعددة:
+ * 1) JSON: {"exercise":"Bodyweight Squat"} أو {"tags":["EXERCISE:..."]}
+ * 2) سطر يبدأ بـ "تمرين:" أو "Exercise:"
+ * 3) بأي مكان يظهر فيه مصطلح من EXERCISE_HINTS
+ */
+function extractSuggestedExercise(reply: string): string | null {
+  if (!reply) return null;
+
+  // 1) محاولة JSON مباشرة
+  const codeJsonMatch = reply.match(/```json([\s\S]*?)```/i);
+  const rawJson = codeJsonMatch ? codeJsonMatch[1] : null;
+
+  const tryParse = (txt?: string) => {
+    if (!txt) return null;
+    try {
+      return JSON.parse(txt);
+    } catch {
+      return null;
+    }
+  };
+
+  const parsed = tryParse(rawJson) || tryParse(reply);
+  if (parsed) {
+    // شكل 1: { exercise: "..." }
+    if (typeof parsed.exercise === "string" && parsed.exercise.trim()) {
+      return parsed.exercise.trim();
+    }
+    // شكل 2: { tags: ["EXERCISE:Bodyweight Squat", ...] }
+    if (Array.isArray(parsed.tags)) {
+      const tag = parsed.tags.find((t: string) => /^exercise:/i.test(t));
+      if (tag) return String(tag).split(":").slice(1).join(":").trim();
+    }
+  }
+
+  // 2) عناوين صريحة
+  const line = reply
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => /^(\*|\-|\u2022)?\s*(تمرين|exercise)\s*[:：]/i.test(l));
+  if (line) {
+    // "تمرين: سكوات" أو "Exercise: Bodyweight Squat"
+    const name = line.split(/[:：]/).slice(1).join(":").trim();
+    if (name) return name;
+  }
+
+  // 3) بحث عام عن كلمات مفتاحية
+  const textN = norm(reply);
+  const hit = EXERCISE_HINTS.find((k) => textN.includes(norm(k)));
+  if (hit) return hit;
+
+  return null;
 }
 
 // ===================== المكوّن =====================
@@ -219,6 +294,7 @@ export default function ChatBox({
   autoStartAdvice,
   autoStartPrompt,
   sessionKey,
+  onSuggestedExercise, // ✅ جديد
 }: ChatBoxProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -286,16 +362,23 @@ export default function ChatBox({
         localStorage.setItem(storageKey, response.session_id);
 
         // لو الـAPI ما أعطى يوتيوب، استخدم اللي بنيناه
-        const youtubeLink = response.youtube && response.youtube.startsWith("http")
-          ? response.youtube
-          : yt;
+        const youtubeLink =
+          response.youtube && response.youtube.startsWith("http") ? response.youtube : yt;
+
+        const replyText = response.reply ?? "";
+
+        // ✅ التقاط اسم تمرين من الرد (بأي من الصيغ المدعومة) وإبلاغ الصفحة
+        const suggested = extractSuggestedExercise(replyText);
+        if (suggested && onSuggestedExercise) {
+          onSuggestedExercise(suggested);
+        }
 
         setMessages((prev) => [
           ...prev,
           {
             id: createId(),
             role: "assistant",
-            content: response.reply,
+            content: replyText,
             youtube: youtubeLink,
           },
         ]);
@@ -320,7 +403,7 @@ export default function ChatBox({
         setIsTyping(false);
       }
     },
-    [input, isTyping, musclesContext, sessionId, storageKey]
+    [input, isTyping, musclesContext, sessionId, storageKey, onSuggestedExercise]
   );
 
   // تشغيل تلقائي عند وجود عضلات
