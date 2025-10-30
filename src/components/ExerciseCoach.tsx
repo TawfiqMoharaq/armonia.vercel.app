@@ -6,10 +6,13 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
-// بعد: استخدم latest أو 1
+// ✅ رابط نموذج MediaPipe الصحيح (استخدم latest أو رقم الإصدار)
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
-const WASM_BASE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm";
+
+// ✅ مسار WASM المناسب للإصدار 0.10.22 (بدّلنا عن rc إلى الثابت)
+const WASM_BASE_URL =
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
 
 const KNEE_UP_THRESHOLD = 160;
 const KNEE_DOWN_MIN = 70;
@@ -86,8 +89,9 @@ export default function ExerciseCoach() {
           return;
         }
 
+        // ✅ استخدم MODEL_URL الصحيح هنا
         poseRef.current = await PoseLandmarker.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: MODEL_ASSET_URL },
+          baseOptions: { modelAssetPath: MODEL_URL },
           delegate: "GPU",
           runningMode: "VIDEO",
           numPoses: 1,
