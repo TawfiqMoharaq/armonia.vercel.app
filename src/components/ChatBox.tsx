@@ -1,14 +1,11 @@
-// src/components/ChatBox.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ExerciseCard from "./ExerciseCard";
-import ChatReply from "./ChatReply"; // ✅ عرض ردود المساعد بتنسيق موحّد
+import ChatReply from "./ChatReply";
 import { findExerciseByName, type Exercise } from "../data/exercises";
 
-/* ======================= تنظيف واستخراج ======================= */
+/* ---------------- تنظيف النص ---------------- */
 const stripCodeFences = (t: string) =>
-  (t ?? "")
-    .replace(/```json[\s\S]*?```/gi, "")
-    .replace(/```[\s\S]*?```/g, "");
+  (t ?? "").replace(/```json[\s\S]*?```/gi, "").replace(/```[\s\S]*?```/g, "");
 
 const stripJsonKeysEverywhere = (t: string) =>
   t
@@ -62,9 +59,9 @@ const extractUiAndPayload = (data: any): { ui: string; payload?: any } => {
   }
   return { ui: "" };
 };
-/* ============================================================= */
+/* -------------------------------------------- */
 
-/* ===================== أنواع الداتا ====================== */
+/* --------------- أنواع الداتا --------------- */
 export type Muscle = {
   muscle_ar: string;
   muscle_en: string;
@@ -95,7 +92,7 @@ type ChatResponse = {
   usedOpenAI: boolean;
   youtube: string;
 };
-/* ========================================================= */
+/* -------------------------------------------- */
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8080";
 
@@ -107,9 +104,7 @@ type Message = {
   raw?: ChatResponse;
 };
 
-type Props = {
-  muscles: Muscle[];
-};
+type Props = { muscles: Muscle[] };
 
 const ChatBox: React.FC<Props> = ({ muscles }) => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -118,7 +113,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // ✅ لوحة التمرين أسفل الشات
+  // ✅ صندوق التمرين — نبقيه لو ما قدرنا نكشف تمرين جديد
   const [currentExercise, setCurrentExercise] = useState<Exercise | null>(null);
 
   useEffect(() => {
@@ -127,49 +122,79 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
 
   const context = useMemo<ChatContext>(() => ({ muscles: muscles ?? [] }), [muscles]);
 
-  /* ===================== Fallback ذكي للتمرين ===================== */
-  // ✅ خريطة كلمات مفتاحية -> اسم تمرين (نقدر نوسّعها لاحقاً)
-  const KEYWORD_TO_EX: Array<{ kw: RegExp; name: string; coachType?: string; tips?: string[] }> = [
-    { kw: /سكوات|squat/i, name: "Squat", coachType: "squat", tips: [
-      "خذ وضع القدمين بعرض الكتفين.",
-      "انزل بالحوض للخلف وكأنك تجلس على كرسي.",
-      "حافظ على الركب باتجاه أصابع القدمين.",
-    ]},
-    { kw: /plank|بلانك/i, name: "Plank", tips: [
-      "شد البطن وحافظ على الجسم بخط مستقيم.",
-      "المرفقين تحت الكتفين والتنفس هادئ.",
-    ]},
-    { kw: /chin\s*tuck|ارجاع الذقن|إرجاع الذقن/i, name: "Chin Tuck", tips: [
-      "اسحب الذقن للداخل برفق بدون إمالة الرأس.",
-      "حافظ 3–5 ثواني وكرر.",
-    ]},
+  /* ---------- كشف التمرين: بدائل + مطابقة غامضة ---------- */
+  // بدائل أسماء شائعة لكل مفتاح
+  const KEYWORD_MAP: Array<{
+    kw: RegExp;
+    candidates: { name: string; coachType?: string; tips?: string[] }[];
+  }> = [
+    {
+      kw: /سكوات|squat/i,
+      candidates: [
+        { name: "Squat", coachType: "squat", tips: ["خذ وضع القدمين بعرض الكتفين.", "انزل بالحوض للخلف.", "حافظ على الركب باتجاه أصابع القدمين."] },
+        { name: "Bodyweight Squat", coachType: "squat" },
+        { name: "Air Squat", coachType: "squat" },
+        { name: "سكوات", coachType: "squat" },
+      ],
+    },
+    {
+      kw: /plank|بلانك/i,
+      candidates: [
+        { name: "Plank" },
+        { name: "Front Plank" },
+        { name: "بلانك" },
+      ],
+    },
+    {
+      kw: /chin\s*tuck|ارجاع الذقن|إرجاع الذقن/i,
+      candidates: [{ name: "Chin Tuck" }, { name: "Neck Chin Tuck" }],
+    },
   ];
 
-  // ✅ نبني Exercise مؤقت إذا ما قدرنا نلقاه من الداتا
-  const makeAdHocExercise = (name: string, coachType?: string, tips?: string[]): Exercise => {
-    return {
-      name,
-      coachType: (coachType ?? "") as any,
-      tips: tips ?? [],
-      // خصائص إضافية اختيارية حسب تعريفك في data/exercises (نتجاوزها هنا)
-    } as any;
-  };
-
-  const detectExerciseFromText = (text: string): Exercise | null => {
-    for (const rule of KEYWORD_TO_EX) {
+  const tryFindLoose = (text: string): Exercise | null => {
+    // 1) ابحث حسب الماب
+    for (const rule of KEYWORD_MAP) {
       if (rule.kw.test(text)) {
-        // نحاول أولاً نلقاه من قاعدة البيانات
-        const found = findExerciseByName(rule.name) || findExerciseByName(text);
-        if (found) return found;
-        // وإلا نرجع ad-hoc يكفي لعرض الكارد/تشغيل Runner لو coachType= "squat"
-        return makeAdHocExercise(rule.name, rule.coachType, rule.tips);
+        for (const cand of rule.candidates) {
+          const exact = findExerciseByName(cand.name);
+          if (exact) return exact as Exercise;
+        }
+        // 2) مطابقة contains على نفس المرشحين
+        for (const cand of rule.candidates) {
+          const variants = [cand.name, " " + cand.name + " ", cand.name.toLowerCase()];
+          for (const v of variants) {
+            const found =
+              findExerciseByName(v) ||
+              findExerciseByName(v.trim()) ||
+              (findExerciseByName as any)(v.toUpperCase?.());
+            if (found) return found as Exercise;
+          }
+        }
+        // 3) ما لقينا؟ نُنشئ ad-hoc
+        const primary = rule.candidates[0];
+        return {
+          name: primary.name,
+          coachType: (primary.coachType ?? "") as any,
+          tips: primary.tips ?? [],
+        } as any;
       }
     }
+
+    // 4) fallback عام: كلمات عربية/إنجليزية مباشرة
+    if (/سكوات/i.test(text)) {
+      return (findExerciseByName("Bodyweight Squat") ||
+        findExerciseByName("Squat") ||
+        ({
+          name: "Squat",
+          coachType: "squat",
+          tips: [],
+        } as any)) as Exercise;
+    }
+
     return null;
   };
-  /* =============================================================== */
 
-  /* ================= إرسال رسالة ================= */
+  /* --------------------- إرسال رسالة --------------------- */
   const sendMessage = async (userText: string) => {
     const text = userText.trim();
     if (!text) return;
@@ -231,17 +256,25 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
       };
       setMessages((m) => [...m, botMsg]);
 
-      // ✅ حدّث صندوق التمرين تحت الشات:
-      // أولاً من الـpayload إن وجد
+      // ---------- تحديث صندوق التمرين ----------
+      // 1) من الـpayload لو موجود
       const nameFromPayload = (botMsg.raw as any)?.payload?.exercise;
-      let ex: Exercise | null = nameFromPayload ? findExerciseByName(String(nameFromPayload)) : null;
+      let nextExercise: Exercise | null = nameFromPayload
+        ? (findExerciseByName(String(nameFromPayload)) as any)
+        : null;
 
-      // ✅ fallback: استنتاج من نص المساعد/المستخدم
-      if (!ex) {
-        ex = detectExerciseFromText(`${botMsg.pretty}\n${userMsg.pretty}`);
+      // 2) وإلا: كشف غامض من نصّ المساعد + المستخدم
+      if (!nextExercise) {
+        nextExercise = tryFindLoose(`${botMsg.pretty}\n${userMsg.pretty}`);
       }
 
-      setCurrentExercise(ex || null);
+      // 3) لو لقينا شيء—حدّث. لو لا، لا تمسح الحالي (نحافظ عليه)
+      if (nextExercise) {
+        setCurrentExercise(nextExercise);
+        console.log("[exercise-detect] chosen =", nextExercise?.name);
+      } else {
+        console.log("[exercise-detect] none matched — keeping previous");
+      }
     } catch (err) {
       console.error(err);
       const fallback =
@@ -268,7 +301,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
     await sendMessage(text);
   };
 
-  /* ============ إرسال تلقائي عند تحديد العضلة ============ */
+  /* -------- إرسال تلقائي عند تحديد العضلة -------- */
   const autoSentRef = useRef(false);
   useEffect(() => {
     if (!autoSentRef.current && muscles && muscles.length > 0) {
@@ -277,7 +310,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
     }
   }, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* =============== إدخال المستخدم =============== */
+  /* ----------------- إدخال المستخدم ----------------- */
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -285,7 +318,6 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
     }
   };
 
-  /* ====== كلمات مفتاحية ذكية لروابط البحث (يوتيوب) ====== */
   const pickFallbackKeywords = (m: Message): string | undefined => {
     const p = m.raw?.payload as any;
     return (
@@ -300,7 +332,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
 
   return (
     <div className="w-full flex flex-col gap-4">
-      {/* 🔷 صندوق الشات */}
+      {/* الشات */}
       <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         <div className="h-[380px] overflow-y-auto rounded-xl bg-slate-50 p-3 space-y-3">
           {messages.length === 0 ? (
@@ -309,10 +341,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
             </div>
           ) : (
             messages.map((m) => (
-              <div
-                key={m.id}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-              >
+              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
                   className={[
                     "max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm",
@@ -330,9 +359,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
               </div>
             ))
           )}
-          {busy && (
-            <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>
-          )}
+          {busy && <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>}
         </div>
 
         {/* الإدخال */}
@@ -355,7 +382,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         </div>
       </div>
 
-      {/* 🟩 صندوق التمرين تحت الشات */}
+      {/* صندوق التمرين تحت الشات */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">🎯 التمرين المقترح</h3>
