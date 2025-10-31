@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { sendChat } from "../lib/api";
 import { useNavigate } from "react-router-dom";
+import ChatReply from "../components/ChatReply";
 
 interface SurveyState {
   sound: string;
