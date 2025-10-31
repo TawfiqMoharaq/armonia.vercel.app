@@ -2,13 +2,13 @@ import React from "react";
 import ExerciseCoach from "./ExerciseCoach";
 
 type ExerciseRunnerProps = {
-  gif: string;
+  gif?: string | null;   // ← صار اختياري
   title: string;
   onClose?: () => void;
 };
 
 export default function ExerciseRunner({ gif, title, onClose }: ExerciseRunnerProps) {
-  const gifSrc = gif?.startsWith("/") ? gif : (gif || "/gifs/squat.gif");
+  const hasGif = !!gif && typeof gif === "string";
 
   return (
     <div className="w-full">
@@ -19,21 +19,19 @@ export default function ExerciseRunner({ gif, title, onClose }: ExerciseRunnerPr
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* GIF يسار */}
-        <div className="rounded-3xl shadow border bg-white flex items-center justify-center">
-          <img
-            src={gifSrc}
-            alt="exercise demo"
-            className="w-full h-full object-contain"
-            onError={(e) => {
-              const img = e.currentTarget as HTMLImageElement;
-              if (!img.src.endsWith("/gifs/squat.gif")) img.src = "/gifs/squat.gif";
-            }}
-          />
-        </div>
+      <div className={`grid gap-4 ${hasGif ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
+        {/* GIF يسار (شرطي) */}
+        {hasGif && (
+          <div className="rounded-3xl shadow border bg-white flex items-center justify-center">
+            <img
+              src={gif!}
+              alt="exercise demo"
+              className="w-full h-full object-contain"
+            />
+          </div>
+        )}
 
-        {/* المدرب يمين */}
+        {/* المدرب */}
         <div className="w-full">
           <ExerciseCoach />
         </div>
