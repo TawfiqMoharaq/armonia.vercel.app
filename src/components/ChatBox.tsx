@@ -4,18 +4,12 @@ import ExerciseCard from "./ExerciseCard";
 import ChatReply from "./ChatReply";
 import { findExerciseByName, type Exercise } from "../data/exercises";
 
-const stripCodeFences = (t: string) =>
-  (t ?? "").replace(/```json[\s\S]*?```/gi, "").replace(/```[\s\S]*?```/g, "");
+const stripCodeFences = (t: string) => (t ?? "").replace(/```json[\s\S]*?```/gi, "").replace(/```[\s\S]*?```/g, "");
 const stripJsonKeysEverywhere = (t: string) =>
-  t
-    .replace(/\bjson\b/gi, "")
-    .replace(
-      /"?(ui_text|payload|exercise|reps|tips)"?\s*:\s*(\{[^}]*\}|\[[^\]]*\]|"(?:\\.|[^"\\])*"|[^,}\n]+)\s*,?/gi,
-      ""
-    )
-    .replace(/\{[\s\S]{10,}\}/g, "");
-const cleanModelText = (t: string) =>
-  stripJsonKeysEverywhere(stripCodeFences(t ?? "")).replace(/\n{3,}/g, "\n\n").trim();
+  t.replace(/\bjson\b/gi, "")
+   .replace(/"?(ui_text|payload|exercise|reps|tips)"?\s*:\s*(\{[^}]*\}|\[[^\]]*\]|"(?:\\.|[^"\\])*"|[^,}\n]+)\s*,?/gi, "")
+   .replace(/\{[\s\S]{10,}\}/g, "");
+const cleanModelText = (t: string) => stripJsonKeysEverywhere(stripCodeFences(t ?? "")).replace(/\n{3,}/g, "\n\n").trim();
 const tryParseJson = (s: unknown): any | null => { if (typeof s !== "string") return null; try { return JSON.parse(s); } catch { return null; } };
 const regexExtractUiText = (s: string): string | null => { const m = s.match(/"ui_text"\s*:\s*"(.*?)"/s); return m ? m[1].replace(/\\"/g, '"').replace(/\\n/g, "\n") : null; };
 const extractUiAndPayload = (data: any): { ui: string; payload?: any } => {
@@ -65,7 +59,7 @@ const ChatBox: React.FC<Props> = ({
   sessionKey,
   onSuggestedExercise,
 }) => {
-  console.log("[ChatBox] v2.4 loaded");
+  console.log("[ChatBox] v2.5 loaded");
   const musclesArr = useMemo<Muscle[]>(
     () => (musclesContext && musclesContext.length ? musclesContext : muscles || []),
     [musclesContext, muscles]
@@ -84,11 +78,13 @@ const ChatBox: React.FC<Props> = ({
 
   const context = useMemo<ChatContext>(() => ({ muscles: musclesArr ?? [] }), [musclesArr]);
 
+  // كلمات أكثر شمولًا (عربي/إنجليزي/تعابير)
   const RULES: Array<{ kw: RegExp; name: string; coachType?: string; tips?: string[]; aliases?: string[] }> = [
-    { kw: /سكوات|سكوّت|السكوات|squat/i, name: "Squat", aliases: ["Bodyweight Squat", "Air Squat", "سكوات"], coachType: "squat",
+    { kw: /(سكوات|سكوّت|السكوات|\bsquat\b|\bair\s*squat\b|\bbodyweight\s*squat\b)/i,
+      name: "Squat", aliases: ["Bodyweight Squat", "Air Squat", "سكوات"], coachType: "squat",
       tips: ["خذ وضع القدمين بعرض الكتفين.","انزل بالحوض للخلف.","حافظ على الركب باتجاه أصابع القدمين."] },
-    { kw: /plank|بلانك|البلانك/i, name: "Plank", aliases: ["Front Plank", "بلانك"] },
-    { kw: /chin\s*tuck|ارجاع الذقن|إرجاع الذقن/i, name: "Chin Tuck", aliases: ["Neck Chin Tuck"] },
+    { kw: /(بلانك|البلانك|\bplank\b|\bfront\s*plank\b)/i, name: "Plank", aliases: ["Front Plank", "بلانك"] },
+    { kw: /(ارجاع الذقن|إرجاع الذقن|chin\s*tuck|neck\s*chin\s*tuck)/i, name: "Chin Tuck", aliases: ["Neck Chin Tuck"] },
   ];
   const makeAdHoc = (name: string, coachType?: string, tips?: string[]): Exercise =>
     ({ name, coachType: (coachType ?? "") as any, tips: tips ?? [] } as any);
@@ -112,7 +108,7 @@ const ChatBox: React.FC<Props> = ({
     const userMsg: Message = { id: crypto.randomUUID(), role: "user", text, pretty: cleanModelText(text) };
     setMessages((m) => [...m, userMsg]);
 
-    // كشف مسبق — يطلع الكارد فورًا حتى لو الـAPI يرد 404/500
+    // كشف مسبق — يظهر الكارد فوراً حتى لو الـAPI فشل
     const preEx = detectExerciseFromText(userMsg.pretty);
     if (preEx) {
       setCurrentExercise(preEx);
@@ -130,9 +126,7 @@ const ChatBox: React.FC<Props> = ({
       });
 
       let data: ChatResponse | string;
-      try { data = (await res.json()) as ChatResponse; }
-      catch { data = await res.text(); }
-
+      try { data = (await res.json()) as ChatResponse; } catch { data = await res.text(); }
       if (typeof data === "object" && data && !sessionId) setSessionId((data as ChatResponse).session_id);
 
       const { ui, payload } = extractUiAndPayload(data);
@@ -143,7 +137,7 @@ const ChatBox: React.FC<Props> = ({
       };
       setMessages((m) => [...m, botMsg]);
 
-      // كشف لاحق
+      // كشف لاحق من الرد أو النصوص
       let ex: Exercise | null = null;
       const nameFromPayload = (botMsg.raw as any)?.payload?.exercise;
       if (nameFromPayload) ex = findExerciseByName(String(nameFromPayload));
@@ -163,6 +157,19 @@ const ChatBox: React.FC<Props> = ({
     }
   };
 
+  // ✅ تصحيح تلقائي: لو ما طلع الكارد لأي سبب، افحص آخر الرسائل وحدّد التمرين
+  useEffect(() => {
+    if (currentExercise) return;
+    const last = messages.slice(-4);
+    const blob = last.map(m => m.pretty).join("\n");
+    const ex = detectExerciseFromText(blob);
+    if (ex) {
+      setCurrentExercise(ex);
+      onSuggestedExercise?.(ex.name);
+      console.log("[exercise-detect] fixup =", ex.name);
+    }
+  }, [messages, currentExercise, onSuggestedExercise]);
+
   const send = async () => {
     const txt = input.trim();
     if (!txt || busy) return;
@@ -173,9 +180,7 @@ const ChatBox: React.FC<Props> = ({
   const autoSentRef = useRef(false);
   useEffect(() => {
     if (!autoStartAdvice || autoSentRef.current) return;
-    const prompt =
-      (autoStartPrompt && autoStartPrompt.trim()) ||
-      "شعور بسيط بالألم — خلّنا نبدأ بخطة آمنة 💪. أعطني نصائح مختصرة وتمرين مناسب.";
+    const prompt = (autoStartPrompt && autoStartPrompt.trim()) || "شعور بسيط بالألم — خلّنا نبدأ بخطة آمنة 💪. أعطني نصائح مختصرة وتمرين مناسب.";
     autoSentRef.current = true;
     void sendMessage(prompt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,7 +238,7 @@ const ChatBox: React.FC<Props> = ({
           <h3 className="text-lg font-semibold">🎯 التمرين المقترح</h3>
         </div>
         {!currentExercise ? (
-          <p className="text-slate-500 mt-2">سيظهر هنا التمرين عندما يقترحه المدرب (سكوات/بلانك/…).</p>
+          <p className="text-slate-500 mt-2">سيظهر هنا التمرين عندما يُذكر (سكوات/بلانك/…).</p>
         ) : (
           <div className="mt-2"><ExerciseCard exercise={currentExercise} /></div>
         )}
