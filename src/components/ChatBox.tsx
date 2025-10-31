@@ -122,11 +122,52 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   const [currentExercise, setCurrentExercise] = useState<Exercise | null>(null);
 
   useEffect(() => {
-    // مفيد للتأكد من صحة الـ API في الإنتاج
     console.log("VITE_API_BASE =", API_BASE);
   }, []);
 
   const context = useMemo<ChatContext>(() => ({ muscles: muscles ?? [] }), [muscles]);
+
+  /* ===================== Fallback ذكي للتمرين ===================== */
+  // ✅ خريطة كلمات مفتاحية -> اسم تمرين (نقدر نوسّعها لاحقاً)
+  const KEYWORD_TO_EX: Array<{ kw: RegExp; name: string; coachType?: string; tips?: string[] }> = [
+    { kw: /سكوات|squat/i, name: "Squat", coachType: "squat", tips: [
+      "خذ وضع القدمين بعرض الكتفين.",
+      "انزل بالحوض للخلف وكأنك تجلس على كرسي.",
+      "حافظ على الركب باتجاه أصابع القدمين.",
+    ]},
+    { kw: /plank|بلانك/i, name: "Plank", tips: [
+      "شد البطن وحافظ على الجسم بخط مستقيم.",
+      "المرفقين تحت الكتفين والتنفس هادئ.",
+    ]},
+    { kw: /chin\s*tuck|ارجاع الذقن|إرجاع الذقن/i, name: "Chin Tuck", tips: [
+      "اسحب الذقن للداخل برفق بدون إمالة الرأس.",
+      "حافظ 3–5 ثواني وكرر.",
+    ]},
+  ];
+
+  // ✅ نبني Exercise مؤقت إذا ما قدرنا نلقاه من الداتا
+  const makeAdHocExercise = (name: string, coachType?: string, tips?: string[]): Exercise => {
+    return {
+      name,
+      coachType: (coachType ?? "") as any,
+      tips: tips ?? [],
+      // خصائص إضافية اختيارية حسب تعريفك في data/exercises (نتجاوزها هنا)
+    } as any;
+  };
+
+  const detectExerciseFromText = (text: string): Exercise | null => {
+    for (const rule of KEYWORD_TO_EX) {
+      if (rule.kw.test(text)) {
+        // نحاول أولاً نلقاه من قاعدة البيانات
+        const found = findExerciseByName(rule.name) || findExerciseByName(text);
+        if (found) return found;
+        // وإلا نرجع ad-hoc يكفي لعرض الكارد/تشغيل Runner لو coachType= "squat"
+        return makeAdHocExercise(rule.name, rule.coachType, rule.tips);
+      }
+    }
+    return null;
+  };
+  /* =============================================================== */
 
   /* ================= إرسال رسالة ================= */
   const sendMessage = async (userText: string) => {
@@ -190,9 +231,16 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
       };
       setMessages((m) => [...m, botMsg]);
 
-      // ✅ حدّث صندوق التمرين تحت الشات (إذا رجع اسم تمرين)
-      const name = (botMsg.raw as any)?.payload?.exercise;
-      const ex = name ? findExerciseByName(String(name)) : null;
+      // ✅ حدّث صندوق التمرين تحت الشات:
+      // أولاً من الـpayload إن وجد
+      const nameFromPayload = (botMsg.raw as any)?.payload?.exercise;
+      let ex: Exercise | null = nameFromPayload ? findExerciseByName(String(nameFromPayload)) : null;
+
+      // ✅ fallback: استنتاج من نص المساعد/المستخدم
+      if (!ex) {
+        ex = detectExerciseFromText(`${botMsg.pretty}\n${userMsg.pretty}`);
+      }
+
       setCurrentExercise(ex || null);
     } catch (err) {
       console.error(err);
@@ -272,10 +320,8 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
                   ].join(" ")}
                 >
                   {m.role === "assistant" ? (
-                    // ✅ عرض موحّد لردود المساعد مع ذكاء في ترتيب العناوين/النقاط/الروابط
                     <ChatReply text={m.pretty} fallbackKeywords={pickFallbackKeywords(m)} />
                   ) : (
-                    // رسالة المستخدم كنص بسيط RTL
                     <div dir="rtl" className="text-slate-800">
                       {m.pretty}
                     </div>
@@ -313,7 +359,6 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">🎯 التمرين المقترح</h3>
-          {/* زر تصفية/إخفاء لو حبيت مستقبلاً */}
         </div>
 
         {!currentExercise ? (
