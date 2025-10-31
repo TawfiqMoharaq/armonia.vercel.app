@@ -65,7 +65,7 @@ const ChatBox: React.FC<Props> = ({
   sessionKey,
   onSuggestedExercise,
 }) => {
-  console.log("[ChatBox] v2.3 loaded");
+  console.log("[ChatBox] v2.4 loaded");
   const musclesArr = useMemo<Muscle[]>(
     () => (musclesContext && musclesContext.length ? musclesContext : muscles || []),
     [musclesContext, muscles]
@@ -85,9 +85,9 @@ const ChatBox: React.FC<Props> = ({
   const context = useMemo<ChatContext>(() => ({ muscles: musclesArr ?? [] }), [musclesArr]);
 
   const RULES: Array<{ kw: RegExp; name: string; coachType?: string; tips?: string[]; aliases?: string[] }> = [
-    { kw: /سكوات|سكوّت|squat/i, name: "Squat", aliases: ["Bodyweight Squat", "Air Squat", "سكوات"], coachType: "squat",
+    { kw: /سكوات|سكوّت|السكوات|squat/i, name: "Squat", aliases: ["Bodyweight Squat", "Air Squat", "سكوات"], coachType: "squat",
       tips: ["خذ وضع القدمين بعرض الكتفين.","انزل بالحوض للخلف.","حافظ على الركب باتجاه أصابع القدمين."] },
-    { kw: /plank|بلانك/i, name: "Plank", aliases: ["Front Plank", "بلانك"] },
+    { kw: /plank|بلانك|البلانك/i, name: "Plank", aliases: ["Front Plank", "بلانك"] },
     { kw: /chin\s*tuck|ارجاع الذقن|إرجاع الذقن/i, name: "Chin Tuck", aliases: ["Neck Chin Tuck"] },
   ];
   const makeAdHoc = (name: string, coachType?: string, tips?: string[]): Exercise =>
@@ -112,7 +112,7 @@ const ChatBox: React.FC<Props> = ({
     const userMsg: Message = { id: crypto.randomUUID(), role: "user", text, pretty: cleanModelText(text) };
     setMessages((m) => [...m, userMsg]);
 
-    // كشف مسبق — يظهر الكارد فورًا
+    // كشف مسبق — يطلع الكارد فورًا حتى لو الـAPI يرد 404/500
     const preEx = detectExerciseFromText(userMsg.pretty);
     if (preEx) {
       setCurrentExercise(preEx);
@@ -123,17 +123,27 @@ const ChatBox: React.FC<Props> = ({
     setBusy(true);
     try {
       const body: ChatRequest = { session_id: sessionId, user_message: text, context, language: "ar" };
-      const res = await fetch(`${API_BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
       let data: ChatResponse | string;
-      try { data = (await res.json()) as ChatResponse; } catch { data = await res.text(); }
+      try { data = (await res.json()) as ChatResponse; }
+      catch { data = await res.text(); }
+
       if (typeof data === "object" && data && !sessionId) setSessionId((data as ChatResponse).session_id);
 
       const { ui, payload } = extractUiAndPayload(data);
       const pretty = cleanModelText(ui) || "تم تجهيز إرشاداتك. ابدأ بإحماء خفيف (5–10 دقائق) ثم اتبع الخطوات المقترحة.";
-      const botMsg: Message = { id: crypto.randomUUID(), role: "assistant", text: ui, pretty, raw: typeof data === "object" ? { ...(data as any), payload: payload ?? (data as any).payload } : undefined };
+      const botMsg: Message = {
+        id: crypto.randomUUID(), role: "assistant", text: ui, pretty,
+        raw: typeof data === "object" ? { ...(data as any), payload: payload ?? (data as any).payload } : undefined,
+      };
       setMessages((m) => [...m, botMsg]);
 
-      // كشف لاحق بعد الرد
+      // كشف لاحق
       let ex: Exercise | null = null;
       const nameFromPayload = (botMsg.raw as any)?.payload?.exercise;
       if (nameFromPayload) ex = findExerciseByName(String(nameFromPayload));
@@ -145,7 +155,7 @@ const ChatBox: React.FC<Props> = ({
       }
     } catch (err) {
       console.error(err);
-      const fallback = "تعذر الاتصال بالخدمة الآن. جرّب لاحقًا أو تحقق من إعداد VITE_API_BASE و CORS.";
+      const fallback = "تعذر الاتصال بالخدمة الآن. جرّب لاحقًا أو تحقق من إعداد VITE_API_BASE.";
       setMessages((m) => [...m, { id: crypto.randomUUID(), role: "assistant", text: fallback, pretty: fallback }]);
     } finally {
       setBusy(false);
@@ -163,13 +173,17 @@ const ChatBox: React.FC<Props> = ({
   const autoSentRef = useRef(false);
   useEffect(() => {
     if (!autoStartAdvice || autoSentRef.current) return;
-    const prompt = (autoStartPrompt && autoStartPrompt.trim()) || "شعور بسيط بالألم — خلّنا نبدأ بخطة آمنة 💪. أعطني نصائح مختصرة وتمرين مناسب.";
+    const prompt =
+      (autoStartPrompt && autoStartPrompt.trim()) ||
+      "شعور بسيط بالألم — خلّنا نبدأ بخطة آمنة 💪. أعطني نصائح مختصرة وتمرين مناسب.";
     autoSentRef.current = true;
     void sendMessage(prompt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStartAdvice, autoStartPrompt, musclesArr?.length]);
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
 
   const pickFallbackKeywords = (m: Message): string | undefined => {
     const p = m.raw?.payload as any;
@@ -178,6 +192,7 @@ const ChatBox: React.FC<Props> = ({
 
   return (
     <div className="w-full flex flex-col gap-4">
+      {/* الشات */}
       <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         <div className="h-[380px] overflow-y-auto rounded-xl bg-slate-50 p-3 space-y-3">
           {messages.length === 0 ? (
@@ -186,7 +201,9 @@ const ChatBox: React.FC<Props> = ({
             messages.map((m) => (
               <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className={["max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm", m.role === "user" ? "bg-blue-50" : "bg-white"].join(" ")}>
-                  {m.role === "assistant" ? <ChatReply text={m.pretty} fallbackKeywords={pickFallbackKeywords(m)} /> : <div dir="rtl" className="text-slate-800">{m.pretty}</div>}
+                  {m.role === "assistant"
+                    ? <ChatReply text={m.pretty} fallbackKeywords={pickFallbackKeywords(m)} />
+                    : <div dir="rtl" className="text-slate-800">{m.pretty}</div>}
                 </div>
               </div>
             ))
@@ -194,6 +211,7 @@ const ChatBox: React.FC<Props> = ({
           {busy && <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>}
         </div>
 
+        {/* الإدخال */}
         <div className="mt-3 flex items-end gap-2">
           <textarea
             ref={inputRef}
