@@ -7,7 +7,7 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
-// وصلات الهيكل (BlazePose 33 نقطة)
+// ——— وصلات الهيكل (BlazePose 33 نقطة) ———
 const POSE_CONNECTIONS: Array<[number, number]> = [
   [0,1],[1,2],[2,3],[3,7],
   [0,4],[4,5],[5,6],[6,8],
@@ -19,18 +19,28 @@ const POSE_CONNECTIONS: Array<[number, number]> = [
   [24,26],[26,28],[28,30],[28,32],
 ];
 
-// نماذج/WASM محلية
+// ——— نماذج/WASM محلية ———
 const MODEL_CANDIDATES = ["/models/pose_landmarker_lite.task"];
 const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
 
-// إعدادات العد والتنبيه
-const KNEE_UP_THRESHOLD = 160;
-const KNEE_DOWN_MIN = 70;
-const KNEE_DOWN_MAX = 100;
-const BACK_SAFE_THRESHOLD = 150;
+// ——— إعدادات السكوات ———
+const KNEE_UP_THRESHOLD = 160;   // أعلى
+const KNEE_DOWN_MIN     = 70;    // أسفل (مدى)
+const KNEE_DOWN_MAX     = 100;
+const BACK_SAFE_THRESHOLD = 150; // تنبيه الظهر
 
-// نعرض الصورة معكوسة (كاميرا أمامية)
-const MIRROR = true;
+// ——— إعدادات فلترة/عدّ ———
+const MIRROR = true;                // عكس أفقي للكاميرا الأمامية
+const VIS_MIN = 0.60;               // حد أدنى لظهور المفصل
+const MEAN_VIS_MIN = 0.60;          // متوسط ظهور المفاصل المطلوبة
+const MIN_BBOX_H_RATIO = 0.45;      // ارتفاع البوكس كنسبة من الكانفس (لتجنب الوجه فقط)
+const KNEE_RANGE: [number, number] = [40, 180];
+const BACK_RANGE: [number, number] = [90, 200];
+
+const EMA_ALPHA = 0.25;             // تنعيم زوايا (EMA)
+const DOWN_MIN_FRAMES = 4;          // أقل عدد إطارات متتالية لتثبيت وضع DOWN
+const UP_MIN_FRAMES   = 4;          // أقل عدد إطارات متتالية لتثبيت وضع UP
+const COOLDOWN_MS     = 600;        // مدة تبريد بين العدّات
 
 type AngleSample = { knee: number; back: number };
 const toDeg = (r: number) => (r * 180) / Math.PI;
@@ -68,6 +78,28 @@ function explainGetUserMediaError(err: any): string {
   }
 }
 
+// ——— أدوات فلترة إضافية ———
+function bboxFromLandmarks(lms: NormalizedLandmark[]) {
+  let minX=1, minY=1, maxX=0, maxY=0;
+  for (const p of lms) {
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+  }
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+}
+function meanVisibility(points: (NormalizedLandmark|undefined)[]) {
+  const vals = points.map(p => p?.visibility ?? 0);
+  return vals.reduce((a,b)=>a+b,0) / vals.length;
+}
+function inRange(v: number|null, r: [number, number]) {
+  return v!=null && v>=r[0] && v<=r[1];
+}
+function ema(prev: number|null, next: number|null, alpha=EMA_ALPHA) {
+  if (next==null) return prev;
+  if (prev==null) return next;
+  return prev*(1-alpha) + next*alpha;
+}
+
 export default function ExerciseCoach() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -75,8 +107,15 @@ export default function ExerciseCoach() {
   const rafRef = useRef<number>();
   const streamRef = useRef<MediaStream | null>(null);
 
-  const wasDownRef = useRef(false);
-  const lastSampleRef = useRef<AngleSample>({ knee: -1, back: -1 });
+  // عدّاد الحالة
+  const stateRef = useRef<"UP" | "DOWN" | "UNKNOWN">("UNKNOWN");
+  const downFramesRef = useRef(0);
+  const upFramesRef   = useRef(0);
+  const lastRepAtRef  = useRef(0);
+
+  // عينات/تنعيم
+  const emaKneeRef = useRef<number|null>(null);
+  const emaBackRef = useRef<number|null>(null);
 
   const [isReady, setIsReady] = useState(false);
   const [running, setRunning] = useState(false);
@@ -125,11 +164,7 @@ export default function ExerciseCoach() {
   async function startCamera() {
     try {
       setCameraError(null);
-      setRepCount(0);
-      setKneeAngle(null);
-      setBackAngle(null);
-      setBackWarning(false);
-      wasDownRef.current = false;
+      resetCounters();
 
       if (!navigator.mediaDevices?.getUserMedia)
         throw new Error("المتصفح لا يدعم getUserMedia.");
@@ -170,6 +205,42 @@ export default function ExerciseCoach() {
     setRunning(false);
   }
 
+  function resetCounters() {
+    setRepCount(0);
+    setKneeAngle(null);
+    setBackAngle(null);
+    setBackWarning(false);
+    stateRef.current = "UNKNOWN";
+    downFramesRef.current = 0;
+    upFramesRef.current   = 0;
+    lastRepAtRef.current  = 0;
+    emaKneeRef.current = null;
+    emaBackRef.current = null;
+  }
+
+  function validPose(landmarks: NormalizedLandmark[], canvasH: number) {
+    // 1) تحقق ظهور مفاصل أساسية
+    const leg = pickLeg(landmarks);
+    const reqJoints = [
+      landmarks[leg.hip],
+      landmarks[leg.knee],
+      landmarks[leg.ankle],
+      landmarks[leg.shoulder],
+    ];
+    const visOK = reqJoints.every(p => (p?.visibility ?? 0) >= VIS_MIN);
+    if (!visOK) return false;
+
+    // 2) متوسط الظهور
+    if (meanVisibility(reqJoints) < MEAN_VIS_MIN) return false;
+
+    // 3) بُعد/حجم الجسم (تجنّب الوجه فقط)
+    const bb = bboxFromLandmarks(landmarks);
+    const bboxHpx = bb.h * canvasH; // لأن y normalized
+    if (bboxHpx < canvasH * MIN_BBOX_H_RATIO) return false;
+
+    return true;
+  }
+
   function loop() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -188,74 +259,87 @@ export default function ExerciseCoach() {
     const now = performance.now();
     const result = landmarker.detectForVideo(video, now);
 
-    // 1) امسح الفريم
+    // 1) خلفية الفيديو
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // 2) ارسم فريم الفيديو على الكانفس (مع عكس أفقي للكاميرا الأمامية)
     ctx.save();
-    if (MIRROR) {
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-    }
+    if (MIRROR) { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     ctx.restore();
 
-    // 3) ارسم الهيكل فوق الفيديو
     if (result.landmarks.length) {
       const landmarks = result.landmarks[0];
 
-      // نخلي الرسم بالأبيض مع ظل بسيط عشان يكون واضح
-      ctx.save();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = "white";
-      ctx.fillStyle = "white";
-      ctx.shadowColor = "rgba(0,0,0,0.8)";
-      ctx.shadowBlur = 6;
+      if (validPose(landmarks, canvas.height)) {
+        // 2) رسم الهيكل
+        ctx.save();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "white";
+        ctx.fillStyle = "white";
+        ctx.shadowColor = "rgba(0,0,0,0.8)";
+        ctx.shadowBlur = 6;
+        const drawer = new DrawingUtils(ctx);
+        drawer.drawConnectors(landmarks, POSE_CONNECTIONS);
+        drawer.drawLandmarks(landmarks, { radius: 4, visibilityMin: 0.65, fillColor: "white" });
+        ctx.restore();
 
-      const drawer = new DrawingUtils(ctx);
-      drawer.drawConnectors(landmarks, POSE_CONNECTIONS);
-      drawer.drawLandmarks(landmarks, {
-        radius: 4,
-        visibilityMin: 0.65,
-        fillColor: "white",
-      });
-      ctx.restore();
+        // 3) حساب الزوايا
+        const leg = pickLeg(landmarks);
+        const hip = landmarks[leg.hip];
+        const knee = landmarks[leg.knee];
+        const ankle = landmarks[leg.ankle];
+        const shoulder = landmarks[leg.shoulder];
 
-      // 4) حساب الزوايا والعدّ
-      const leg = pickLeg(landmarks);
-      const hip = landmarks[leg.hip];
-      const knee = landmarks[leg.knee];
-      const ankle = landmarks[leg.ankle];
-      const shoulder = landmarks[leg.shoulder];
+        let k: number | null = null;
+        let b: number | null = null;
+        if (hip && knee && ankle) k = vectorAngle(hip, knee, ankle);
+        if (shoulder && hip && knee) b = vectorAngle(shoulder, hip, knee);
 
-      let k: number | null = null;
-      let b: number | null = null;
-      if (hip && knee && ankle) k = vectorAngle(hip, knee, ankle);
-      if (shoulder && hip && knee) b = vectorAngle(shoulder, hip, knee);
+        // 4) فلترة المدى المنطقي
+        if (!inRange(k, KNEE_RANGE)) k = null;
+        if (!inRange(b, BACK_RANGE)) b = null;
 
-      if (k != null) {
-        const r = clampInt(k);
-        if (r != null) {
-          if (Math.abs(lastSampleRef.current.knee - r) >= 1) setKneeAngle(r);
-          lastSampleRef.current.knee = r;
-        }
-        if (k >= KNEE_DOWN_MIN && k <= KNEE_DOWN_MAX) wasDownRef.current = true;
-        if (k >= KNEE_UP_THRESHOLD && wasDownRef.current) {
-          wasDownRef.current = false;
-          setRepCount((c) => c + 1);
+        // 5) تنعيم EMA + عرض
+        emaKneeRef.current = ema(emaKneeRef.current, k);
+        emaBackRef.current = ema(emaBackRef.current, b);
+        const kneeSmoothed = clampInt(emaKneeRef.current ?? null);
+        const backSmoothed = clampInt(emaBackRef.current ?? null);
+        setKneeAngle(kneeSmoothed);
+        setBackAngle(backSmoothed);
+        setBackWarning((backSmoothed ?? 999) < BACK_SAFE_THRESHOLD);
+
+        // 6) عدّاد بحالة وهسترة وإطارات أدنى + وقت تبريد
+        if (kneeSmoothed != null) {
+          const isDown = kneeSmoothed >= KNEE_DOWN_MIN && kneeSmoothed <= KNEE_DOWN_MAX;
+          const isUp   = kneeSmoothed >= KNEE_UP_THRESHOLD;
+
+          if (isDown) {
+            downFramesRef.current++;
+            upFramesRef.current = 0;
+            if (downFramesRef.current >= DOWN_MIN_FRAMES) {
+              stateRef.current = "DOWN";
+            }
+          } else if (isUp) {
+            upFramesRef.current++;
+            downFramesRef.current = 0;
+            if (upFramesRef.current >= UP_MIN_FRAMES) {
+              // نعدّ فقط عند انتقال DOWN → UP + تبريد
+              if (stateRef.current === "DOWN") {
+                const t = performance.now();
+                if (t - lastRepAtRef.current >= COOLDOWN_MS) {
+                  setRepCount(c => c + 1);
+                  lastRepAtRef.current = t;
+                }
+              }
+              stateRef.current = "UP";
+            }
+          } else {
+            // منطقة وسطية — لا نغير الحالة إلا إذا ثبتنا DOWN/UP
+            upFramesRef.current = 0;
+            downFramesRef.current = 0;
+          }
         }
       }
-
-      if (b != null) {
-        const r = clampInt(b);
-        if (r != null) {
-          if (Math.abs(lastSampleRef.current.back - r) >= 1) setBackAngle(r);
-          lastSampleRef.current.back = r;
-        }
-        setBackWarning(b < BACK_SAFE_THRESHOLD);
-      } else {
-        setBackWarning(false);
-      }
+      // إن لم يكن الوضع صالحًا: لا نحسب ولا نرسم شيء إضافي
     }
 
     rafRef.current = requestAnimationFrame(loop);
@@ -288,11 +372,9 @@ export default function ExerciseCoach() {
         </button>
       )}
 
-      {/* الفيديو ممكن يبقى مخفي — نأخذ منه الفريمات فقط */}
       <video ref={videoRef} className="hidden" playsInline muted />
       <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-      {/* عداد وزوايا */}
       <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-10">
         <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
           <span className="font-semibold text-lg">{repCount}</span>
@@ -308,7 +390,6 @@ export default function ExerciseCoach() {
         </div>
       </div>
 
-      {/* شريط انتظار/أخطاء */}
       {(!isReady || cameraError) && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
           <p className="text-sm leading-relaxed" dir="rtl">
