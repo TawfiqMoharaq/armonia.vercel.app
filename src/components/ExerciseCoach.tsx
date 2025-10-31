@@ -34,6 +34,7 @@ const KNEE_DOWN_MAX = 100;
 const BACK_SAFE_THRESHOLD = 150;
 
 // فلترة/جودة
+// ↓ رخّينا متطلب الجذع شوي، وبرضه ما له علاقة بالعدّ أصلاً
 const V_TORSO_MIN = 0.45;
 const V_LEG_MIN = 0.60;
 const REQUIRED_KEYPOINTS = [11,12,23,24,27,28];
@@ -118,7 +119,7 @@ function isPoseQualityGood(lms: NormalizedLandmark[]): boolean {
 
 /* -------------------------------- Component -------------------------------- */
 
-export default function ExerciseCoach({ compact = false }: { compact?: boolean }) {
+export default function ExerciseCoach() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const poseRef = useRef<PoseLandmarker | null>(null);
@@ -138,6 +139,7 @@ export default function ExerciseCoach({ compact = false }: { compact?: boolean }
   const [kneeAngle, setKneeAngle] = useState<number | null>(null);
   const [backAngle, setBackAngle] = useState<number | null>(null);
 
+  // طريقة عرض النصائح (ابقيناها كما هي)
   const [tipsOverlayMode, setTipsOverlayMode] = useState(true);
   const [tipsOpen, setTipsOpen] = useState(true);
 
@@ -275,7 +277,7 @@ export default function ExerciseCoach({ compact = false }: { compact?: boolean }
         if (k != null) { const r = clampInt(k); if (r != null) setKneeAngle((p)=>p===r?p:r); }
         else setKneeAngle(null);
 
-        // الظهر معلومة اختيارية للنصائح فقط
+        // الظهر معلومة اختيارية للنصائح فقط، لا تحذير ولا إيقاف
         let b: number | null = null;
         if (shoulder && hip && knee) b = vectorAngle(shoulder, hip, knee);
         if (b != null) { const r = clampInt(b); if (r != null) setBackAngle((p)=>p===r?p:r); }
@@ -332,16 +334,12 @@ export default function ExerciseCoach({ compact = false }: { compact?: boolean }
     </span>
   );
 
-  // ====== العرض ======
   return (
-    <div className={compact ? "w-[360px]" : "grid gap-6 md:grid-cols-[minmax(720px,1fr)_320px]"}>
+    <div className="grid gap-6 md:grid-cols-[minmax(720px,1fr)_320px]">
       {/* الكاميرا */}
-      <div
-        className={[
-          "relative rounded-3xl overflow-hidden border border-white/20 bg-black shadow",
-          compact ? "w-[360px] h-[270px]" : "w-full aspect-video"
-        ].join(" ")}
-      >
+      <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/15 bg-black shadow-lg">
+        {/* أزرار */}
+        {/* ... نفس أزرار التشغيل/الإيقاف كما هي ... */}
         <button
           onClick={running ? stopCamera : startCamera}
           disabled={!isReady && !running}
@@ -351,9 +349,7 @@ export default function ExerciseCoach({ compact = false }: { compact?: boolean }
         </button>
 
         <video ref={videoRef} className="hidden" playsInline muted />
-
-        {/* ✅ canvas يملأ الحاوية المصغرة/الكبيرة */}
-        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-contain rounded-2xl" />
+        <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
         {/* عدّاد وزوايا */}
         <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
@@ -366,92 +362,96 @@ export default function ExerciseCoach({ compact = false }: { compact?: boolean }
           </div>
         </div>
 
+        {/* لا يوجد أي تحذير للظهر بعد الآن */}
         {cameraError && (
           <div className="absolute inset-x-0 bottom-0 m-4 px-4 py-3 rounded-xl bg-red-600/90 text-white text-sm z-10">
             {cameraError}
           </div>
         )}
 
-        {tipsOverlayMode && !cameraError && !compact && (
+        {/* شرائح مصغّرة (كما هي) */}
+        {tipsOverlayMode && !cameraError && (
           <div className="absolute left-4 bottom-4 z-10 flex flex-wrap gap-2 max-w-[80%]">
             <TipChip label={depthOk ? "عمق ممتاز ✅" : depthAlmost ? "قرب للقاع" : "انزل أكثر"} />
             <TipChip label={atBottom ? "ثبت ثانية بالقاع" : "ثبّت ثانية بالقاع"} />
+            {/* إبقينا شريحة الظهر كاختيارية/معلومة */}
             <TipChip label={backOk ? "ظهر مستقيم ✅" : "وضع الظهر (اختياري)"} />
           </div>
         )}
       </div>
 
-      {/* السايدبار (مخفي في الوضع المصغّر) */}
-      {!compact && (
-        <aside className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-white/90 font-semibold text-lg">نصائح السكوات</h3>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-white/70">عرض مصغّر على الفيديو</label>
-              <input
-                type="checkbox"
-                checked={tipsOverlayMode}
-                onChange={(e)=>setTipsOverlayMode(e.target.checked)}
-                className="accent-blue-500"
-              />
+      {/* السايدبار والنصائح (بدون تغيير في الصياغة) */}
+      <aside className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-white/90 font-semibold text-lg">نصائح السكوات</h3>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-white/70">عرض مصغّر على الفيديو</label>
+            <input
+              type="checkbox"
+              checked={tipsOverlayMode}
+              onChange={(e)=>setTipsOverlayMode(e.target.checked)}
+              className="accent-blue-500"
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={()=>setTipsOpen(s=>!s)}
+          className="md:hidden px-3 py-1.5 rounded-xl text-white bg-black/50 border border-white/10"
+        >
+          {tipsOpen ? "إخفاء النصائح" : "إظهار النصائح"}
+        </button>
+
+        {(!tipsOverlayMode || !running) && tipsOpen && (
+          <div className="rounded-2xl bg.white/5 text-white p-4 border border-white/10 space-y-3"
+               style={{ backgroundColor: "rgba(255,255,255,0.05)" }}>
+            {/* شارات حالة */}
+            <div className="flex flex-wrap gap-2">
+              <span className={`px-2 py-0.5 rounded-md text-xs ${depthOk ? "bg-emerald-600/25 text-emerald-300" : "bg-amber-600/25 text-amber-200"}`}>
+                {depthOk ? "عمق ممتاز" : depthAlmost ? "قرّب للقاع" : "انزل أكثر"}
+              </span>
+              <span className={`px-2 py-0.5 rounded-md text-xs ${atBottom ? "bg-emerald-600/25 text-emerald-300" : "bg-amber-600/25 text-amber-200"}`}>
+                {atBottom ? "ثبات جيد" : "ثبّت ثانية بالقاع"}
+              </span>
+              <span className={`px-2 py-0.5 rounded-md text-xs ${backOk ? "bg-emerald-600/25 text-emerald-300" : "bg-amber-600/25 text-amber-200"}`}>
+                {backOk ? "ظهر مستقيم" : "وضع الظهر (اختياري)"}
+              </span>
+            </div>
+
+            {/* نفس الأربع نقاط المختصرة */}
+            <ul className="list-disc ps-5 space-y-2 text-sm leading-6">
+              <li>قدّم الورك للخلف، الصدر مرفوع، نظر للأمام.</li>
+              <li>انزل حتى زاوية الركبة <b>70–100°</b> ثم اثبت <b>1s</b>.</li>
+              <li>ظهر محايد (≥ <b>{BACK_SAFE_THRESHOLD}°</b>) — معلومة اختيارية.</li>
+              <li>اصعد بدفع الكعب حتى تمدد ~<b>{KNEE_UP_THRESHOLD}°</b> دون قفل عنيف.</li>
+            </ul>
+
+            {/* أرقام سريعة */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">الركبة</div>
+                <div className="text-base font-semibold">{kneeAngle ?? "—"}°</div>
+              </div>
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">الظهر</div>
+                <div className="text-base font-semibold">{backAngle ?? "—"}°</div>
+              </div>
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">الوضع</div>
+                <div className="text-base font-semibold">
+                  {running ? (phaseRef.current === "UP" ? "فوق" :
+                               phaseRef.current === "GOING_DOWN" ? "نزول" :
+                               phaseRef.current === "BOTTOM_HOLD" ? "ثبات" : "طلوع") : "متوقف"}
+                </div>
+              </div>
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">العدّات</div>
+                <div className="text-base font-semibold">{repCount}</div>
+              </div>
             </div>
           </div>
-
-          <button
-            onClick={()=>setTipsOpen(s=>!s)}
-            className="md:hidden px-3 py-1.5 rounded-xl text-white bg-black/50 border border-white/10"
-          >
-            {tipsOpen ? "إخفاء النصائح" : "إظهار النصائح"}
-          </button>
-
-          {(!tipsOverlayMode || !running) && tipsOpen && (
-            <div className="rounded-2xl bg.white/5 text-white p-4 border border-white/10 space-y-3"
-                 style={{ backgroundColor: "rgba(255,255,255,0.05)" }}>
-              <div className="flex flex-wrap gap-2">
-                <span className={`px-2 py-0.5 rounded-md text-xs ${depthOk ? "bg-emerald-600/25 text-emerald-300" : "bg-amber-600/25 text-amber-200"}`}>
-                  {depthOk ? "عمق ممتاز" : depthAlmost ? "قرّب للقاع" : "انزل أكثر"}
-                </span>
-                <span className={`px-2 py-0.5 rounded-md text-xs ${atBottom ? "bg-emerald-600/25 text-emerald-300" : "bg-amber-600/25 text-amber-200"}`}>
-                  {atBottom ? "ثبات جيد" : "ثبّت ثانية بالقاع"}
-                </span>
-                <span className={`px-2 py-0.5 rounded-md text-xs ${backOk ? "bg-emerald-600/25 text-emerald-300" : "bg-amber-600/25 text-amber-200"}`}>
-                  {backOk ? "ظهر مستقيم" : "وضع الظهر (اختياري)"}
-                </span>
-              </div>
-
-              <ul className="list-disc ps-5 space-y-2 text-sm leading-6">
-                <li>قدّم الورك للخلف، الصدر مرفوع، نظر للأمام.</li>
-                <li>انزل حتى زاوية الركبة <b>70–100°</b> ثم اثبت <b>1s</b>.</li>
-                <li>ظهر محايد (≥ <b>{BACK_SAFE_THRESHOLD}°</b>) — معلومة اختيارية.</li>
-                <li>اصعد بدفع الكعب حتى تمدد ~<b>{KNEE_UP_THRESHOLD}°</b> دون قفل عنيف.</li>
-              </ul>
-
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-xl bg-white/5 p-2">
-                  <div className="opacity-80">الركبة</div>
-                  <div className="text-base font-semibold">{kneeAngle ?? "—"}°</div>
-                </div>
-                <div className="rounded-xl bg-white/5 p-2">
-                  <div className="opacity-80">الظهر</div>
-                  <div className="text-base font-semibold">{backAngle ?? "—"}°</div>
-                </div>
-                <div className="rounded-xl bg-white/5 p-2">
-                  <div className="opacity-80">الوضع</div>
-                  <div className="text-base font-semibold">
-                    {running ? (phaseRef.current === "UP" ? "فوق" :
-                                 phaseRef.current === "GOING_DOWN" ? "نزول" :
-                                 phaseRef.current === "BOTTOM_HOLD" ? "ثبات" : "طلوع") : "متوقف"}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-white/5 p-2">
-                  <div className="opacity-80">العدّات</div>
-                  <div className="text-base font-semibold">{repCount}</div>
-                </div>
-              </div>
-            </div>
-          )}
-        </aside>
-      )}
+        )}
+      </aside>
     </div>
   );
 }
