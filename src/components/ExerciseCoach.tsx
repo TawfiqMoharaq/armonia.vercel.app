@@ -1,5 +1,5 @@
-// src/components/ExerciseCoach.tsx
-import React, { useEffect, useRef, useState } from "react";
+// ExerciseCoach.tsx
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   DrawingUtils,
   FilesetResolver,
@@ -7,444 +7,384 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
-// ===== مسارات محلية (ضع الملفات كما رتّبناها سابقًا) =====
-const MODEL_CANDIDATES = ["/models/pose_landmarker_lite.task"];
+// ====================== الإعدادات العامة ======================
+const DEBUG = false;
+
+// ✳️ عدّل المسارات هنا لو مجلداتك مختلفة
 const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
+const MODEL_PATH = "/models/pose_landmarker_lite.task";
 
-// ===== خيارات العرض/الفلاتر =====
-const MIRROR = true;
+// عتبات العد (سكوات)
+const KNEE_UP_THRESHOLD = 160;   // الركبة ممدودة
+const KNEE_DOWN_MIN = 70;        // الركبة في القاع (زاوية صغيرة)
+const KNEE_DOWN_MAX = 100;
+const BACK_SAFE_THRESHOLD = 150; // الظهر شبه مستقيم (زاوية الورك)
 
-// فلترة صلاحية الوضعية (عشان ما يمسك وجه فقط)
-const VIS_MIN = 0.50;          // أقل رؤية مسموحة لكل نقطة
-const MEAN_VIS_MIN = 0.55;     // متوسط الرؤية الكلي
-const MIN_BBOX_H_RATIO = 0.35; // أقل نسبة ارتفاع الجسم داخل الإطار (0.35 = 35% من ارتفاع الكانفس)
+// التصفية
+const MIN_VISIBILITY = 0.6;      // حد ظهور النقاط المقبول
+const ROI_MIN_HEIGHT_RATIO = 0.45;  // لازم يكون الشخص شاغل ~ نصف الإطار عموديًا (كتف↔كاحل)
+const SMOOTHING_WINDOW = 5;      // عدد العينات للمُعدّل المتحرك
+const MIN_REP_INTERVAL_MS = 900; // أقل زمن بين العدّات (حماية من الاهتزاز)
 
-// مجال الزوايا المقبول (رفض القيم الشاذة)
-const KNEE_RANGE: [number, number] = [35, 185];
-const BACK_RANGE: [number, number] = [80, 205];
+// فهارس معالم Mediapipe
+const LM = {
+  NOSE: 0,
+  LEFT_SHOULDER: 11,
+  RIGHT_SHOULDER: 12,
+  LEFT_HIP: 23,
+  RIGHT_HIP: 24,
+  LEFT_KNEE: 25,
+  RIGHT_KNEE: 26,
+  LEFT_ANKLE: 27,
+  RIGHT_ANKLE: 28,
+} as const;
 
-// تنعيم (EMA)
-const EMA_ALPHA = 0.20;
+type PoseSide = "left" | "right";
 
-// ثبات الحالات (لتجنب الرجفان)
-const DOWN_MIN_FRAMES = 3;
-const UP_MIN_FRAMES = 3;
-const COOLDOWN_MS = 400;
-
-// عتبات السكوات (يمكن تبسيطها أكثر عند الحاجة)
-const KNEE_UP_THRESHOLD_BASE = 155; // قبل المعايرة الذاتية
-const KNEE_DOWN_MIN = 60;
-const KNEE_DOWN_MAX = 110;
-
-const BACK_SAFE_THRESHOLD = 145;
-
-// ===== مساعدات رياضية =====
-const toDeg = (r: number) => (r * 180) / Math.PI;
-const clampInt = (v: number | null) => (v == null || Number.isNaN(v) ? null : Math.round(v));
-const inRange = (x: number | null, [a, b]: [number, number]) => x != null && x >= a && x <= b;
-
-function ema(prev: number | null, next: number, alpha = EMA_ALPHA) {
-  if (prev == null) return next;
-  return prev * (1 - alpha) + next * alpha;
+// ====================== دوال مساعدة ======================
+function visOK(l?: NormalizedLandmark | null, min = MIN_VISIBILITY) {
+  return !!l && (l.visibility ?? 0) >= min;
 }
 
-function vectorAngle(a: NormalizedLandmark, c: NormalizedLandmark, b: NormalizedLandmark) {
-  const v1 = [a.x - c.x, a.y - c.y, a.z - c.z];
-  const v2 = [b.x - c.x, b.y - c.y, b.z - c.z];
-  const dot = v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
-  const m1 = Math.hypot(v1[0], v1[1], v1[2]);
-  const m2 = Math.hypot(v2[0], v2[1], v2[2]);
-  if (!m1 || !m2) return null;
-  const cos = Math.min(Math.max(dot / (m1 * m2), -1), 1);
-  return toDeg(Math.acos(cos));
+function deg(v: number) {
+  return (v * 180) / Math.PI;
 }
 
-function pickLeg(lms: NormalizedLandmark[]) {
-  const L = { shoulder: 11, hip: 23, knee: 25, ankle: 27 };
-  const R = { shoulder: 12, hip: 24, knee: 26, ankle: 28 };
-  const score = (s: typeof L) =>
-    [s.hip, s.knee, s.ankle].reduce((t, i) => t + (lms[i]?.visibility ?? 0), 0);
-  return score(L) >= score(R) ? L : R;
+function angleAt(b: NormalizedLandmark, a: NormalizedLandmark, c: NormalizedLandmark) {
+  // زاوية عند B من القطعتين BA و BC
+  const v1x = a.x - b.x, v1y = a.y - b.y;
+  const v2x = c.x - b.x, v2y = c.y - b.y;
+  const dot = v1x * v2x + v1y * v2y;
+  const m1 = Math.hypot(v1x, v1y);
+  const m2 = Math.hypot(v2x, v2y);
+  if (m1 === 0 || m2 === 0) return 180;
+  let cos = dot / (m1 * m2);
+  cos = Math.min(1, Math.max(-1, cos));
+  return deg(Math.acos(cos));
 }
 
-// تأكد أن الوضعية فعلاً "جسم كامل نسبيًا" وليست وجه فقط
-function validPose(lms: NormalizedLandmark[], canvasH: number) {
-  const vis = lms.map((p) => p.visibility ?? 0);
-  const meanVis = vis.reduce((a, b) => a + b, 0) / vis.length;
-  if (meanVis < MEAN_VIS_MIN) return false;
-  // احسب أعلى وأدنى y للصندوق التقريبي للجسم
-  let minY = +Infinity,
-    maxY = -Infinity;
-  for (const p of lms) {
-    if (p.visibility != null && p.visibility >= VIS_MIN) {
-      minY = Math.min(minY, p.y);
-      maxY = Math.max(maxY, p.y);
-    }
-  }
-  if (!isFinite(minY) || !isFinite(maxY)) return false;
-  const bboxH = (maxY - minY) * canvasH; // بوحدة البكسل
-  const ok = bboxH >= MIN_BBOX_H_RATIO * canvasH;
-  return ok;
+function movingAverage(arr: number[], window = SMOOTHING_WINDOW) {
+  const n = Math.min(arr.length, window);
+  if (n === 0) return 0;
+  let s = 0;
+  for (let i = arr.length - n; i < arr.length; i++) s += arr[i];
+  return s / n;
 }
 
-// ====== المتغيّرات العامة (خارج React state) ======
-let debugReason = "";           // سبب عدم العدّ (يوضح على الشاشة)
-let autoUpRef: number | null = null;   // عتبة UP ذاتية
-let calibratingUntil = 0;
-let maxStandingKnee = 0;
+// يختار الجهة ذات الظهور الأفضل (يمين/يسار)
+function pickBestSide(landmarks: NormalizedLandmark[]): PoseSide | null {
+  const leftScore = [
+    landmarks[LM.LEFT_SHOULDER],
+    landmarks[LM.LEFT_HIP],
+    landmarks[LM.LEFT_KNEE],
+    landmarks[LM.LEFT_ANKLE],
+  ].filter((l) => visOK(l)).length;
 
-// ====== المكوّن ======
-export default function ExerciseCoach() {
+  const rightScore = [
+    landmarks[LM.RIGHT_SHOULDER],
+    landmarks[LM.RIGHT_HIP],
+    landmarks[LM.RIGHT_KNEE],
+    landmarks[LM.RIGHT_ANKLE],
+  ].filter((l) => visOK(l)).length;
+
+  if (leftScore >= 3 && leftScore >= rightScore) return "left";
+  if (rightScore >= 3 && rightScore >= leftScore) return "right";
+  return null;
+}
+
+// يتحقق أن الجسم داخل الإطار (من الكتف للكاحل عموديًا) لتفادي عد الوجه فقط
+function bodyInFrame(landmarks: NormalizedLandmark[], videoH: number) {
+  const shoulders = [landmarks[LM.LEFT_SHOULDER], landmarks[LM.RIGHT_SHOULDER]].filter(visOK);
+  const ankles = [landmarks[LM.LEFT_ANKLE], landmarks[LM.RIGHT_ANKLE]].filter(visOK);
+  if (!shoulders.length || !ankles.length) return false;
+  const minShoulderY = Math.min(...shoulders.map((s) => s.y));
+  const maxAnkleY = Math.max(...ankles.map((a) => a.y));
+  // y من 0 أعلى إلى 1 أسفل — الفرق النسبي *ارتفاع الفيديو
+  const relHeight = (maxAnkleY - minShoulderY);
+  return relHeight >= ROI_MIN_HEIGHT_RATIO; // نسبة من ارتفاع الإطار
+}
+
+// ====================== المكوّن ======================
+const ExerciseCoach: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const poseRef = useRef<PoseLandmarker | null>(null);
-  const rafRef = useRef<number>();
+
+  const landmarkerRef = useRef<PoseLandmarker | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const rafRef = useRef<number | null>(null);
 
-  // state
-  const [isReady, setIsReady] = useState(false);
+  // عرض/تشغيل
+  const [ready, setReady] = useState(false);
   const [running, setRunning] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const [repCount, setRepCount] = useState(0);
-  const [kneeAngle, setKneeAngle] = useState<number | null>(null);
-  const [backAngle, setBackAngle] = useState<number | null>(null);
-  const [backWarning, setBackWarning] = useState(false);
+  // قراءات
+  const [kneeAngle, setKneeAngle] = useState(0);
+  const [backAngle, setBackAngle] = useState(0);
+  const [reps, setReps] = useState(0);
+  const [cue, setCue] = useState<string>("");
 
-  // العدّ — حالة صغيرة
-  const kneeEmaRef = useRef<number | null>(null);
-  const backEmaRef = useRef<number | null>(null);
-  const downFramesRef = useRef(0);
-  const upFramesRef = useRef(0);
-  const stateRef = useRef<"idle" | "down" | "up">("idle");
-  const lastRepAtRef = useRef(0);
+  // سلاسل للتنعيم
+  const kneeSeries = useRef<number[]>([]);
+  const backSeries = useRef<number[]>([]);
 
-  // تحميل WASM والموديل
+  // حالة العد (قاع/قمة)
+  const inDownPhase = useRef(false);
+  const lastRepTs = useRef(0);
+
+  // ======== التحميل الأول: WASM + Model + صلاحية الكاميرا (لا تبدأ التتبع هنا) ========
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       try {
-        if (!window.isSecureContext) {
-          setCameraError("هذه الصفحة ليست آمنة (HTTPS مطلوب). استخدم https أو localhost.");
-          return;
-        }
-        const fileset = await FilesetResolver.forVisionTasks(WASM_BASE_URL);
+        const vision = await FilesetResolver.forVisionTasks(WASM_BASE_URL);
         if (cancelled) return;
 
-        let lastErr: any;
-        for (const delegate of ["GPU", "CPU"] as const) {
-          for (const url of MODEL_CANDIDATES) {
-            try {
-              poseRef.current = await PoseLandmarker.createFromOptions(fileset, {
-                baseOptions: { modelAssetPath: url },
-                delegate,
-                runningMode: "VIDEO",
-                numPoses: 1,
-              });
-              setIsReady(true);
-              return;
-            } catch (e) {
-              lastErr = e;
-            }
-          }
-        }
-        throw lastErr ?? new Error("تعذر تحميل أي نموذج PoseLandmarker.");
-      } catch (e: any) {
-        setCameraError(e?.message ?? "تعذر تهيئة نماذج MediaPipe.");
+        const landmarker = await PoseLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: MODEL_PATH },
+          runningMode: "VIDEO",
+          numPoses: 1,
+        });
+        if (cancelled) return;
+
+        landmarkerRef.current = landmarker;
+        setReady(true);
+        DEBUG && console.log("✅ PoseLandmarker جاهز");
+      } catch (e) {
+        console.error("❌ فشل تحميل النماذج/WASM:", e);
       }
     })();
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  async function startCamera() {
+  // ======== بدء/إيقاف الكاميرا + حل الشاشة السوداء ========
+  const startCamera = useCallback(async () => {
+    if (!videoRef.current) return;
     try {
-      setCameraError(null);
-      setRepCount(0);
-      setKneeAngle(null);
-      setBackAngle(null);
-      setBackWarning(false);
-
-      // صفّر مسجلات العدّ
-      kneeEmaRef.current = null;
-      backEmaRef.current = null;
-      downFramesRef.current = 0;
-      upFramesRef.current = 0;
-      stateRef.current = "idle";
-      lastRepAtRef.current = 0;
-
-      // معايرة ذاتية في أول 1.2 ثانية
-      autoUpRef = null;
-      maxStandingKnee = 0;
-      calibratingUntil = performance.now() + 1200;
-
-      if (!navigator.mediaDevices?.getUserMedia)
-        throw new Error("المتصفح لا يدعم getUserMedia.");
-
+      // اطلب صلاحية الكاميرا
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: "user" },
         audio: false,
       });
       streamRef.current = stream;
+      videoRef.current.srcObject = stream;
 
-      const video = videoRef.current!;
+      await videoRef.current.play();
+
+      // ضبط أبعاد اللوحة
+      const vw = videoRef.current.videoWidth || 640;
+      const vh = videoRef.current.videoHeight || 480;
       const canvas = canvasRef.current!;
-      video.srcObject = stream;
-      try {
-        await video.play();
-      } catch {}
-
-      const syncCanvas = () => {
-        if (!video.videoWidth || !video.videoHeight) return;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-      };
-      syncCanvas();
-      video.addEventListener("loadedmetadata", syncCanvas, { passive: true } as any);
-      video.addEventListener("resize", syncCanvas, { passive: true } as any);
+      canvas.width = vw;
+      canvas.height = vh;
 
       setRunning(true);
-      loop();
-    } catch (e: any) {
-      setCameraError(explainGetUserMediaError(e));
-      stopCamera();
+      detectLoop(); // ابدأ التتبع
+    } catch (e) {
+      console.error("❌ تعذر تشغيل الكاميرا:", e);
+      setCue("تعذر الوصول للكاميرا. تحقق من الأذونات.");
     }
-  }
+  }, []);
 
-  function stopCamera() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = undefined;
-
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-
+  const stopCamera = useCallback(() => {
     setRunning(false);
-  }
-
-  function loop() {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const landmarker = poseRef.current;
-    if (!video || !canvas || !landmarker) {
-      rafRef.current = requestAnimationFrame(loop);
-      return;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     }
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx || video.readyState < 2) {
-      rafRef.current = requestAnimationFrame(loop);
-      return;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
     }
-
-    const now = performance.now();
-    const result = landmarker.detectForVideo(video, now);
-
-    // خلفية سوداء خفيفة
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#000";
-    ctx.globalAlpha = 0.9;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.globalAlpha = 1;
-
-    debugReason = "no landmarks";
-
-    if (result.landmarks.length) {
-      const landmarks = result.landmarks[0];
-
-      // صلاحية الوضعية
-      if (!validPose(landmarks, canvas.height)) {
-        debugReason = "pose not valid (visibility/size)";
-      } else {
-        // اختيار الرجل الأفضل للحساب
-        const leg = pickLeg(landmarks);
-        const hip = landmarks[leg.hip];
-        const knee = landmarks[leg.knee];
-        const ankle = landmarks[leg.ankle];
-        const shoulder = landmarks[leg.shoulder];
-
-        let k: number | null = null;
-        let b: number | null = null;
-        if (hip && knee && ankle) k = vectorAngle(hip, knee, ankle);
-        if (shoulder && hip && knee) b = vectorAngle(shoulder, hip, knee);
-
-        // رفض القيم الشاذة
-        if (!inRange(k, KNEE_RANGE)) k = null;
-        if (!inRange(b, BACK_RANGE)) b = null;
-
-        // تنعيم
-        if (k != null) kneeEmaRef.current = ema(kneeEmaRef.current, k);
-        if (b != null) backEmaRef.current = ema(backEmaRef.current, b);
-        const kneeSmoothed = kneeEmaRef.current ?? null;
-        const backSmoothed = backEmaRef.current ?? null;
-
-        // تحديث واجهة الأرقام
-        const kShow = clampInt(kneeSmoothed);
-        const bShow = clampInt(backSmoothed);
-        if (kShow != null) setKneeAngle(kShow);
-        if (bShow != null) setBackAngle(bShow ?? null);
-
-        setBackWarning(backSmoothed != null && backSmoothed < BACK_SAFE_THRESHOLD);
-
-        // معايرة ذاتية (أول 1.2 ثانية)
-        if (kneeSmoothed != null) {
-          if (now < calibratingUntil) {
-            maxStandingKnee = Math.max(maxStandingKnee, kneeSmoothed);
-            debugReason = `calibrating... up≈${Math.round(maxStandingKnee)}`;
-          } else if (autoUpRef == null && maxStandingKnee > 0) {
-            autoUpRef = Math.max(145, maxStandingKnee - 8); // خصم بسيط
-          }
-        }
-
-        // حساب العدّ
-        const upThreshold = (autoUpRef ?? KNEE_UP_THRESHOLD_BASE);
-        if (kneeSmoothed != null) {
-          const isDown = kneeSmoothed >= KNEE_DOWN_MIN && kneeSmoothed <= KNEE_DOWN_MAX;
-          const isUp = kneeSmoothed >= upThreshold;
-
-          if (isDown) {
-            downFramesRef.current++;
-            upFramesRef.current = 0;
-            debugReason = "DOWN hold";
-            if (downFramesRef.current >= DOWN_MIN_FRAMES) {
-              stateRef.current = "down";
-            }
-          } else if (isUp) {
-            upFramesRef.current++;
-            debugReason = "UP hold";
-            if (upFramesRef.current >= UP_MIN_FRAMES && stateRef.current === "down") {
-              // تبريد بسيط لمنع العد المزدوج السريع
-              if (now - lastRepAtRef.current >= COOLDOWN_MS) {
-                setRepCount((c) => c + 1);
-                lastRepAtRef.current = now;
-                stateRef.current = "up";
-              }
-            }
-            // إعادة ضبط عدّ الـDOWN بعد الوصول لـUP
-            downFramesRef.current = 0;
-          } else {
-            debugReason = "tracking";
-            // خارج DOWN/UP — حافظ على الحالة
-            downFramesRef.current = 0;
-            upFramesRef.current = 0;
-          }
-        }
-
-        // رسم النقاط
-        const drawer = new DrawingUtils(ctx);
-        ctx.save();
-        if (MIRROR) {
-          ctx.translate(canvas.width, 0);
-          ctx.scale(-1, 1);
-        }
-        drawer.drawLandmarks(landmarks, {
-          radius: 4,
-          visibilityMin: VIS_MIN,
-          fillColor: "#18A4B8",
-        });
-        ctx.restore();
-      }
-    }
-
-    // لوحة debug صغيرة
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(8, canvas.height - 32, 280, 24);
-    ctx.fillStyle = "white";
-    ctx.font = "14px ui-sans-serif, system-ui, -apple-system";
-    ctx.fillText(`debug: ${debugReason}`, 16, canvas.height - 15);
-    ctx.restore();
-
-    rafRef.current = requestAnimationFrame(loop);
-  }
+  }, []);
 
   useEffect(() => {
     return () => {
       stopCamera();
-      poseRef.current?.close();
+      landmarkerRef.current?.close();
     };
-  }, []);
+  }, [stopCamera]);
 
+  // ======== الرسم + الحساب + العد ========
+  const drawAndCount = useCallback(
+    (landmarks: NormalizedLandmark[] | undefined) => {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      if (!canvas || !video) return;
+
+      const ctx = canvas.getContext("2d")!;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // رسم نقاط للمساعدة (اختياري)
+      if (landmarks && landmarks.length) {
+        const utils = new DrawingUtils(ctx as unknown as CanvasRenderingContext2D);
+        utils.drawLandmarks(landmarks, { radius: 1.8 });
+      }
+
+      // لا نعد إلا إذا الجسم في الإطار
+      if (!landmarks || !bodyInFrame(landmarks, video.videoHeight)) {
+        setCue("ابتعد خطوة للخلف حتى يظهر جسمك كاملًا");
+        return;
+      }
+
+      // اختر أفضل جهة
+      const side = pickBestSide(landmarks);
+      if (!side) {
+        setCue("قرّب الكاميرا لتظهر الركبة والورك والكاحل بوضوح");
+        return;
+      }
+
+      const shoulder = landmarks[side === "left" ? LM.LEFT_SHOULDER : LM.RIGHT_SHOULDER];
+      const hip = landmarks[side === "left" ? LM.LEFT_HIP : LM.RIGHT_HIP];
+      const knee = landmarks[side === "left" ? LM.LEFT_KNEE : LM.RIGHT_KNEE];
+      const ankle = landmarks[side === "left" ? LM.LEFT_ANKLE : LM.RIGHT_ANKLE];
+
+      if (![shoulder, hip, knee, ankle].every((l) => visOK(l))) {
+        setCue("ثبّت الكاميرا وتأكد من إضاءة كافية");
+        return;
+      }
+
+      // زاوية الركبة: (Hip - Knee - Ankle)
+      const kneeDeg = angleAt(knee, hip, ankle);
+      kneeSeries.current.push(kneeDeg);
+      if (kneeSeries.current.length > 60) kneeSeries.current.shift();
+      const kneeSmoothed = movingAverage(kneeSeries.current);
+
+      // زاوية الظهر (زاوية الورك): (Shoulder - Hip - Knee)
+      const backDeg = angleAt(hip, shoulder, knee);
+      backSeries.current.push(backDeg);
+      if (backSeries.current.length > 60) backSeries.current.shift();
+      const backSmoothed = movingAverage(backSeries.current);
+
+      setKneeAngle(Math.round(kneeSmoothed));
+      setBackAngle(Math.round(backSmoothed));
+
+      // تنبيهات سلامة الظهر
+      if (backSmoothed < BACK_SAFE_THRESHOLD) {
+        setCue("حافظ على استقامة ظهرك!");
+      } else {
+        setCue("");
+      }
+
+      // منطق العد: نزول ثم صعود (مع مهلة زمنية بين العدّات)
+      const now = performance.now();
+
+      // دخول مرحلة القاع
+      if (
+        !inDownPhase.current &&
+        kneeSmoothed >= KNEE_DOWN_MIN &&
+        kneeSmoothed <= KNEE_DOWN_MAX
+      ) {
+        inDownPhase.current = true;
+      }
+
+      // صعود مكتمل + ظهر آمن + مهلة زمنية كافية
+      const upReached = kneeSmoothed >= KNEE_UP_THRESHOLD;
+      const safeBack = backSmoothed >= BACK_SAFE_THRESHOLD;
+      if (inDownPhase.current && upReached && safeBack) {
+        if (now - lastRepTs.current >= MIN_REP_INTERVAL_MS) {
+          setReps((r) => r + 1);
+          lastRepTs.current = now;
+        }
+        inDownPhase.current = false;
+      }
+    },
+    []
+  );
+
+  // ======== حل شاشة سوداء: استخدام performance.now() للتوقيت ========
+  const detectLoop = useCallback(() => {
+    const landmarker = landmarkerRef.current;
+    const video = videoRef.current;
+    if (!landmarker || !video) return;
+
+    const step = () => {
+      if (!running) return;
+      const ts = performance.now();
+      try {
+        const res = landmarker.detectForVideo(video, ts);
+        const lms = res?.landmarks?.[0];
+        if (lms) drawAndCount(lms);
+      } catch (e) {
+        // أحيانًا ترجع detectForVideo خطأ لو التأطير تغيّر – نتجاهله ونكمل
+        DEBUG && console.warn("detectForVideo error", e);
+      }
+      rafRef.current = requestAnimationFrame(step);
+    };
+
+    step();
+  }, [drawAndCount, running]);
+
+  // ======== واجهة المستخدم ========
   return (
-    <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/20 bg-black shadow">
-      {!running && (
-        <button
-          onClick={startCamera}
-          disabled={!isReady}
-          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow disabled:opacity-50 bg-blue-600 hover:bg-blue-700"
-        >
-          تشغيل الكاميرا 🎥
-        </button>
-      )}
-      {running && (
-        <button
-          onClick={stopCamera}
-          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow bg-gray-700 hover:bg-gray-800"
-        >
-          إيقاف
-        </button>
-      )}
-
-      {/* نخلي الفيديو مخفيًا — نرسم فوقه فقط */}
-      <video ref={videoRef} className="hidden" playsInline muted />
-      <canvas ref={canvasRef} className="w-full h-full object-cover" />
-
-      {/* عدّاد + زوايا */}
-      <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-10">
-        <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
-          <span className="font-semibold text-lg">{repCount}</span>
-          <span>Reps</span>
+    <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+      <div className="relative rounded-2xl overflow-hidden bg-black">
+        <video
+          ref={videoRef}
+          className="w-full h-full object-cover opacity-60"
+          playsInline
+          muted
+        />
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full"
+        />
+        <div className="absolute top-3 left-3 flex items-center gap-2">
+          {ready ? (
+            running ? (
+              <button
+                onClick={stopCamera}
+                className="px-4 py-2 rounded-xl bg-gray-800/80 text-white font-bold"
+              >
+                إيقاف
+              </button>
+            ) : (
+              <button
+                onClick={startCamera}
+                className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold"
+              >
+                بدء
+              </button>
+            )
+          ) : (
+            <div className="px-4 py-2 rounded-xl bg-gray-700 text-white">
+              جارِ التحميل…
+            </div>
+          )}
         </div>
-        <div className="flex flex-col gap-1">
-          <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
-            Knee angle: {kneeAngle ?? "—"}°
-          </span>
-          <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
-            Back angle: {backAngle ?? "—"}°
-          </span>
-        </div>
+
+        {/* شريط التنبيه */}
+        {cue && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl bg-red-600 text-white text-lg font-semibold shadow-lg">
+            {cue}
+          </div>
+        )}
       </div>
 
-      {/* طبقة خطأ/تحميل */}
-      {(!isReady || cameraError) && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
-          <p className="text-sm leading-relaxed" dir="rtl">
-            {cameraError ??
-              "جاري تجهيز MediaPipe (WASM + Model)...\nبعد اكتمال التحميل اضغط تشغيل الكاميرا."}
-          </p>
+      <div className="p-4">
+        <h2 className="text-2xl font-bold mb-3">Bodyweight Squat</h2>
+        <div className="space-y-2 text-lg">
+          <div>
+            <span className="font-semibold">Reps:</span> {reps}
+          </div>
+          <div>
+            <span className="font-semibold">Knee angle:</span> {kneeAngle}°
+          </div>
+          <div>
+            <span className="font-semibold">Back angle:</span> {backAngle}°
+          </div>
+          <ul className="mt-4 list-disc ms-5 text-base text-gray-700">
+            <li>تأكد من إضاءة جيدة وابتعد خطوة للخلف إن لزم.</li>
+            <li>حافظ على الركبتين باتجاه أصابع القدمين.</li>
+            <li>سيتجاهل العداد الحركة إن لم يظهر جسدك كاملًا.</li>
+          </ul>
         </div>
-      )}
-
-      {backWarning && running && !cameraError && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg">
-          حافظ على استقامة ظهرك!
-        </div>
-      )}
+      </div>
     </div>
   );
-}
+};
 
-
-// ======= أخطاء getUserMedia الشائعة (نفس دالة سابقة) =======
-function explainGetUserMediaError(err: any): string {
-  const n = err?.name || "";
-  switch (n) {
-    case "NotAllowedError":
-    case "PermissionDeniedError":
-      return "تم رفض إذن الكاميرا. اسمح بالوصول من شريط العنوان ثم أعد المحاولة.";
-    case "NotFoundError":
-    case "DevicesNotFoundError":
-      return "لم يتم العثور على كاميرا. تأكد من توصيل الكاميرا أو اختيار الجهاز الصحيح.";
-    case "NotReadableError":
-    case "TrackStartError":
-      return "لا يمكن فتح الكاميرا (قد تكون مستخدمة من تطبيق آخر). أغلق التطبيقات الأخرى ثم جرّب.";
-    case "OverconstrainedError":
-      return "إعدادات الكاميرا غير مدعومة على هذا الجهاز. تم تقليل المتطلبات، حدّث الصفحة.";
-    case "SecurityError":
-      return "الوصول للكاميرا يتطلب اتصالاً آمناً (HTTPS).";
-    case "AbortError":
-      return "تعذر بدء تشغيل الكاميرا بسبب خطأ داخلي.";
-    default:
-      return `تعذر تشغيل الكاميرا: ${n || "خطأ غير متوقع"}`;
-  }
-}
+export default ExerciseCoach;
