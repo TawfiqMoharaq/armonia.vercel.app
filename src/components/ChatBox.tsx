@@ -3,25 +3,33 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 /* ======================= تنظيف النص ======================= */
+// يحذف أي أسوار كود (بما فيها ```json ... ```)
 const stripCodeFences = (t: string) =>
   (t ?? "")
     .replace(/```json[\s\S]*?```/gi, "")
     .replace(/```[\s\S]*?```/g, "");
+
+// يحاول إزالة كتل JSON غير المُسوّرة والأسطر الشبيهة بـ JSON
 const stripInlineJson = (t: string) => {
-  let out = t.replace(/\bjson\b/gi, "");
-  out = out.replace(/\{[\s\S]{20,}\}/g, "");
-  out = out.replace(/^\s*"?[a-zA-Z0-9_]+"?\s*:\s*.+$/gm, "");
+  let out = t.replace(/\bjson\b/gi, "");          // إزالة كلمة json المتناثرة
+  out = out.replace(/\{[\s\S]{20,}\}/g, "");      // إزالة كتل { ... } الكبيرة
+  out = out.replace(/^\s*"?[a-zA-Z0-9_]+"?\s*:\s*.+$/gm, ""); // إزالة أسطر "key": value
   return out;
 };
+
+// تنظيف شامل: إزالة أسوار الكود + أي JSON طائش + ترتيب الأسطر
 const cleanModelText = (t: string) => {
   const noFences = stripCodeFences(t);
   const noJson = stripInlineJson(noFences);
   return noJson.replace(/\n{3,}/g, "\n\n").trim();
 };
+
+// انتقاء نص العرض من استجابة الـ API (توافق خلفي)
 const pickUiText = (data: any): string => {
   if (!data) return "";
   if (typeof data.ui_text === "string" && data.ui_text.trim()) return data.ui_text;
   if (typeof data.reply === "string" && data.reply.trim()) return data.reply;
+  // fallback
   return cleanModelText(String(data));
 };
 /* ========================================================= */
@@ -33,29 +41,33 @@ export type Muscle = {
   region: string;
   prob: number;
 };
+
 type ChatContext = { muscles: Muscle[] };
+
 type ChatRequest = {
   session_id?: string | null;
   user_message: string;
   context: ChatContext;
   language?: "ar" | "en";
 };
+
 type ChatResponse = {
-  ui_text?: string;
+  ui_text?: string;   // نص العرض الجميل
   payload?: {
     exercise?: string;
     reps?: string;
     tips?: string[];
     [k: string]: any;
-  };
-  reply?: string;
+  };                  // بيانات داخلية (لا تُعرض)
+  reply?: string;     // توافق خلفي (يساوي ui_text غالبًا)
   session_id: string;
   turns: number;
   usedOpenAI: boolean;
   youtube: string;
 };
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8080";
 /* ========================================================= */
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8080";
 
 /* =============== بطاقة التمرين المباشرة ================== */
 function ExerciseCard({ payload }: { payload: NonNullable<ChatResponse["payload"]> }) {
@@ -87,8 +99,8 @@ function ExerciseCard({ payload }: { payload: NonNullable<ChatResponse["payload"
 type Message = {
   id: string;
   role: "user" | "assistant";
-  text: string;
-  pretty: string;
+  text: string;   // النص الخام
+  pretty: string; // النص المنظّف/المنسّق للعرض
   raw?: ChatResponse;
 };
 
@@ -104,9 +116,14 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // أطبع قيمة الـ API للتأكد منها في المتصفح
+  useEffect(() => {
+    console.log("VITE_API_BASE =", API_BASE);
+  }, []);
+
   const context = useMemo<ChatContext>(() => ({ muscles: muscles ?? [] }), [muscles]);
 
-  /* ================= إرسال رسالة ================= */
+  /* ================= إرسال رسالة (مع fallback ذكي) ================= */
   const sendMessage = async (userText: string) => {
     const text = userText.trim();
     if (!text) return;
@@ -127,34 +144,78 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         context,
         language: "ar",
       };
+
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ChatResponse = await res.json();
+
+      // لو الاستجابة مو OK حاول نقرأ النص لتشخيص أوضح
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        console.error("Chat API HTTP error:", res.status, errText);
+        throw new Error(`HTTP ${res.status} ${errText}`);
+      }
+
+      // جرّب JSON أولاً، ولو ما نفعت خذ النص الخام
+      let data: ChatResponse | null = null;
+      try {
+        data = (await res.json()) as ChatResponse;
+      } catch (e) {
+        const raw = await res.text().catch(() => "");
+        console.error("Failed to parse JSON. Raw response:", raw);
+        const fallback =
+          raw?.trim() || "تعذر فهم استجابة الخادم. حاول مجددًا لاحقًا.";
+        setMessages((m) => [
+          ...m,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            text: fallback,
+            pretty: cleanModelText(fallback) || fallback,
+          },
+        ]);
+        return;
+      }
 
       if (!sessionId) setSessionId(data.session_id);
 
+      // نختار نص العرض ثم ننظفه
       const ui = pickUiText(data);
-      const pretty = cleanModelText(ui);
+      let pretty = cleanModelText(ui);
+
+      // Fallback: إذا التنظيف شال كل شيء، اعرض الخام
+      if (!pretty || !pretty.trim()) {
+        pretty = ui?.trim() || "";
+      }
+      // لو ظل فاضي، اعرض رسالة قصيرة بدل الفراغ
+      if (!pretty || !pretty.trim()) {
+        pretty = "تم تجهيز إرشاداتك. ابدأ بإحماء خفيف (5–10 دقائق) ثم اتبع الخطوات المقترحة.";
+      }
 
       const botMsg: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
         text: ui,
         pretty,
-        raw: data,
+        raw: data, // payload موجود هنا لبطاقة التمرين
       };
+
       setMessages((m) => [...m, botMsg]);
     } catch (err) {
-      const fallback = "تعذر الاتصال بالخدمة الآن. جرّب لاحقًا.";
+      console.error(err);
+      const fallback =
+        "تعذر الاتصال بالخدمة الآن. جرّب لاحقًا أو تحقق من إعداد VITE_API_BASE و CORS.";
       setMessages((m) => [
         ...m,
-        { id: crypto.randomUUID(), role: "assistant", text: fallback, pretty: fallback },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: fallback,
+          pretty: fallback,
+        },
       ]);
-      console.error(err);
     } finally {
       setBusy(false);
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -176,9 +237,9 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
       autoSentRef.current = true;
       const top = muscles.slice(0, 3).map((m) => m.muscle_ar).join("، ");
       const prompt =
-        `حدّدت لي هذه المناطق: ${top}. أعطني تشخيصًا أوليًا بسيطًا وخطوات آمنة، `
-        + `وإذا يوجد تمرين مناسب كبداية (مثل سكوات/بلانك/تمطيط لطيف) أرفقه معي في payload `
-        + `(exercise, reps, tips) بدون أي JSON داخل نص العرض.`;
+        `حدّدت لي هذه المناطق: ${top}. أعطني تشخيصًا أوليًا بسيطًا وخطوات آمنة، ` +
+        `وإذا يوجد تمرين مناسب كبداية (مثل سكوات/بلانك/تمطيط لطيف) أرفقه معي في payload ` +
+        `(exercise, reps, tips) بدون أي JSON داخل نص العرض.`;
       sendMessage(prompt);
     }
   }, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
