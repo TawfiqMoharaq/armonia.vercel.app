@@ -121,9 +121,9 @@ function ExerciseCard({ payload }: { payload: NonNullable<ChatResponse["payload"
   return (
     <div className="mt-2 rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="px-4 py-3 border-b border-slate-200">
+        <div><span className="font-medium">التمرين:</span> {payload.exercise}</div>
       </div>
       <div className="px-4 py-3 space-y-2">
-        <div><span className="font-medium">التمرين:</span> {payload.exercise}</div>
         {payload.reps && <div><span className="font-medium">عدد/مدة:</span> {payload.reps}</div>}
         {Array.isArray(payload.tips) && payload.tips.length > 0 && (
           <div>
