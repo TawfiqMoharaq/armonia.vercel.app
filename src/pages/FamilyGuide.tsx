@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { sendChat } from "../lib/api";
+import { useNavigate } from "react-router-dom";
 
 interface SurveyState {
   sound: string;
@@ -160,6 +161,7 @@ const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
 };
 
 const FamilyGuide = () => {
+  const navigate = useNavigate();
   const [responses, setResponses] = useState<SurveyState>(INITIAL_STATE);
   const [analysis, setAnalysis] = useState("");
   const [loading, setLoading] = useState(false);
@@ -280,19 +282,24 @@ const FamilyGuide = () => {
               const body = stripBoldMarkers(cleaned.slice(colonIndex + 1).trim());
               return (
                 <li key={`bullet-${idx}`} className="leading-relaxed text-[#4A5568]">
-                  <span className="font-semibold text-[#0A6D8B]">{heading}{body ? ":" : ""}</span>
-              {body ? <span className="mr-1">{renderInline(body, responses.activities)}</span> : null}
-            </li>
-          );
-        }
-        return (
-          <li key={`bullet-${idx}`} className="leading-relaxed text-[#4A5568]">
-            {renderInline(cleaned, responses.activities)}
-          </li>
-        );
-      })}
-    </ul>,
-  );
+                  <span className="font-semibold text-[#0A6D8B]">
+                    {heading}
+                    {body ? ":" : ""}
+                  </span>
+                  {body ? (
+                    <span className="mr-1">{renderInline(body, responses.activities)}</span>
+                  ) : null}
+                </li>
+              );
+            }
+            return (
+              <li key={`bullet-${idx}`} className="leading-relaxed text-[#4A5568]">
+                {renderInline(cleaned, responses.activities)}
+              </li>
+            );
+          })}
+        </ul>,
+      );
       bulletBuffer = [];
     };
 
@@ -311,27 +318,54 @@ const FamilyGuide = () => {
         const blockKey = `block-${blocks.length}`;
         blocks.push(
           <p key={blockKey} className="text-[#4A5568] text-sm md:text-base leading-relaxed">
-            <span className="font-semibold text-[#0A6D8B]">{heading}{body ? ":" : ""}</span>
-          {body ? <span className="mr-1">{renderInline(body, responses.activities)}</span> : null}
+            <span className="font-semibold text-[#0A6D8B]">
+              {heading}
+              {body ? ":" : ""}
+            </span>
+            {body ? (
+              <span className="mr-1">{renderInline(body, responses.activities)}</span>
+            ) : null}
+          </p>,
+        );
+        return;
+      }
+
+      const blockKey = `block-${blocks.length}`;
+      blocks.push(
+        <p key={blockKey} className="text-[#4A5568] text-sm md:text-base leading-relaxed">
+          {renderInline(stripBoldMarkers(line), responses.activities)}
         </p>,
       );
-      return;
-    }
-
-    const blockKey = `block-${blocks.length}`;
-    blocks.push(
-      <p key={blockKey} className="text-[#4A5568] text-sm md:text-base leading-relaxed">
-        {renderInline(stripBoldMarkers(line), responses.activities)}
-      </p>,
-    );
-  });
+    });
 
     flushBullets();
     return blocks;
   };
 
   return (
-    <div className="min-h-screen bg-[#F7FAFC] text-gray-800 flex flex-col items-center py-12" dir="rtl">
+    <div
+      className="min-h-screen bg-gradient-to-b from-[#F0F8FA] to-[#FFFFFF] text-gray-800 flex flex-col items-center py-12"
+      dir="rtl"
+    >
+
+    <header className="absolute top-0 left-0 right-0 flex justify-between items-center px-12 py-6">
+      {/* زر الرئيسية على اليمين */}
+        <button
+          onClick={() => navigate("/")}
+          className="text-lg font-semibold text-[#0A6D8B] hover:text-[#18A4B8] transition ml-auto"
+        >
+          الرئيسية
+        </button>
+
+        {/* شعار Armonia على اليسار */}
+        <button
+          onClick={() => navigate("/")}
+          className="text-2xl font-bold text-[#0A6D8B] hover:text-[#18A4B8] transition mr-auto"
+        >
+          Armonia
+        </button>
+      </header>
+
       <h1 className="text-3xl font-bold text-[#0A6D8B] mb-6">دليل الأسرة الذكي</h1>
 
       {!showResult ? (
@@ -400,7 +434,11 @@ const FamilyGuide = () => {
             rows={3}
           />
 
-          {error && <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C]">{error}</div>}
+          {error && (
+            <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C]">
+              {error}
+            </div>
+          )}
 
           <button
             onClick={handleAnalyze}
@@ -412,9 +450,15 @@ const FamilyGuide = () => {
         </div>
       ) : (
         <div className="bg-white shadow-lg rounded-xl p-8 w-full max-w-lg space-y-6">
-          <h2 className="text-2xl font-semibold text-[#0A6D8B] text-center">توصيات سريعة لعائلتكم</h2>
+          <h2 className="text-2xl font-semibold text-[#0A6D8B] text-center">
+            توصيات سريعة لعائلتكم
+          </h2>
 
-          {error && <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C] text-center">{error}</div>}
+          {error && (
+            <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C] text-center">
+              {error}
+            </div>
+          )}
 
           <div className="bg-[#F7FAFC] border border-[#E2E8F0] rounded-lg p-5 space-y-2 text-right text-sm md:text-base">
             {renderAnalysis()}
