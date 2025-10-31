@@ -5,19 +5,25 @@ import {
   FilesetResolver,
   PoseLandmarker,
   type NormalizedLandmark,
-  POSE_CONNECTIONS, // ⬅️ لرسـم الوصلات
 } from "@mediapipe/tasks-vision";
 
-// ✅ تحميل النماذج محلياً من public
-const MODEL_CANDIDATES = [
-  "/models/pose_landmarker_lite.task",
+// وصلات BlazePose (33 landmark) — نعرّفها محلياً لأن tasks-vision لا يصدّرها
+const POSE_CONNECTIONS: Array<[number, number]> = [
+  [0,1],[1,2],[2,3],[3,7],
+  [0,4],[4,5],[5,6],[6,8],
+  [9,10],[11,12],
+  [11,13],[13,15],[15,17],[15,19],[15,21],
+  [12,14],[14,16],[16,18],[16,20],[16,22],
+  [11,23],[12,24],[23,24],
+  [23,25],[25,27],[27,29],[27,31],
+  [24,26],[26,28],[28,30],[28,32],
 ];
+
+// ✅ تحميل النماذج محلياً من public
+const MODEL_CANDIDATES = ["/models/pose_landmarker_lite.task"];
 
 // ✅ تحميل WASM محلياً أيضاً
 const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
-
-// ⛳️ خيار المرآة (سيلفي): إن تبغاه فعّل true
-const MIRROR = true;
 
 // عتبات العدّ والتنبيه
 const KNEE_UP_THRESHOLD = 160;
@@ -80,7 +86,7 @@ export default function ExerciseCoach() {
   const [backAngle, setBackAngle] = useState<number | null>(null);
   const [backWarning, setBackWarning] = useState(false);
 
-  // ====== تهيئة Mediapipe (WASM + Model) ======
+  // تهيئة WASM + الموديل
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -115,7 +121,6 @@ export default function ExerciseCoach() {
     return () => { cancelled = true; };
   }, []);
 
-  // ====== تشغيل/إيقاف الكاميرا ======
   async function startCamera() {
     try {
       setCameraError(null);
@@ -145,8 +150,8 @@ export default function ExerciseCoach() {
         canvas.height = video.videoHeight;
       };
       syncCanvas();
-      video.addEventListener("loadedmetadata", syncCanvas, { passive: true } as any);
-      video.addEventListener("resize", syncCanvas, { passive: true } as any);
+      video.addEventListener("loadedmetadata", syncCanvas, { passive: true });
+      video.addEventListener("resize", syncCanvas, { passive: true });
 
       setRunning(true);
       loop();
@@ -159,14 +164,11 @@ export default function ExerciseCoach() {
   function stopCamera() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = undefined;
-
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-
     setRunning(false);
   }
 
-  // ====== حلقة الرسم والكشف ======
   function loop() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -185,17 +187,17 @@ export default function ExerciseCoach() {
     const now = performance.now();
     const result = landmarker.detectForVideo(video, now);
 
-    // الكانفس شفاف — فقط لمسح رسومات الإطار السابق
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (result.landmarks.length) {
       const landmarks = result.landmarks[0];
       const drawer = new DrawingUtils(ctx);
 
-      // إن كنت مفعل المرآة على DOM, ما تحتاج تعكس هنا. فقط ارسم.
+      // رسم الوصلات + النقاط
       drawer.drawConnectors(landmarks, POSE_CONNECTIONS, { lineWidth: 3 });
       drawer.drawLandmarks(landmarks, { radius: 4, visibilityMin: 0.65, fillColor: "#18A4B8" });
 
+      // حساب الزوايا
       const leg = pickLeg(landmarks);
       const hip = landmarks[leg.hip];
       const knee = landmarks[leg.knee];
@@ -235,7 +237,6 @@ export default function ExerciseCoach() {
     rafRef.current = requestAnimationFrame(loop);
   }
 
-  // تنظيف
   useEffect(() => {
     return () => {
       stopCamera();
@@ -243,16 +244,13 @@ export default function ExerciseCoach() {
     };
   }, []);
 
-  // ====== واجهة العرض ======
   return (
     <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/20 bg-black shadow">
-
-      {/* أزرار التحكم */}
       {!running && (
         <button
           onClick={startCamera}
           disabled={!isReady}
-          className="absolute top-4 left-4 z-20 px-4 py-2 rounded-xl text-white shadow disabled:opacity-50 bg-blue-600 hover:bg-blue-700"
+          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow disabled:opacity-50 bg-blue-600 hover:bg-blue-700"
         >
           تشغيل الكاميرا 🎥
         </button>
@@ -260,33 +258,18 @@ export default function ExerciseCoach() {
       {running && (
         <button
           onClick={stopCamera}
-          className="absolute top-4 left-4 z-20 px-4 py-2 rounded-xl text-white shadow bg-gray-700 hover:bg-gray-800"
+          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow bg-gray-700 hover:bg-gray-800"
         >
           إيقاف
         </button>
       )}
 
-      {/* الفيديو ظاهر في الخلفية */}
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        className="absolute inset-0 w-full h-full object-cover"
-        style={{
-          transform: MIRROR ? "scaleX(-1)" : undefined,
-          filter: "brightness(1.1) contrast(1.05)", // تحسين بسيط لو الإضاءة قليلة
-        }}
-      />
+      {/* نخلي الفيديو مخفي ونرسم فوقه */}
+      <video ref={videoRef} className="hidden" playsInline muted />
+      <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-      {/* الكانفس فوقه فقط للرسومات */}
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full pointer-events-none"
-        style={{ transform: MIRROR ? "scaleX(-1)" : undefined }}
-      />
-
-      {/* HUD يمين فوق */}
-      <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-20">
+      {/* عداد وزوايا */}
+      <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-10">
         <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
           <span className="font-semibold text-lg">{repCount}</span>
           <span>Reps</span>
@@ -301,9 +284,9 @@ export default function ExerciseCoach() {
         </div>
       </div>
 
-      {/* ستاتس التحميل/الأخطاء */}
+      {/* شريط انتظار أو رسالة خطأ */}
       {(!isReady || cameraError) && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6 z-30">
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
           <p className="text-sm leading-relaxed" dir="rtl">
             {cameraError ??
               "جاري تجهيز MediaPipe (WASM + Model)...\nبعد اكتمال التحميل اضغط تشغيل الكاميرا."}
@@ -311,9 +294,9 @@ export default function ExerciseCoach() {
         </div>
       )}
 
-      {/* تحذير الظهر */}
+      {/* تنبيه وضعية الظهر */}
       {backWarning && running && !cameraError && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg z-20">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg">
           حافظ على استقامة ظهرك!
         </div>
       )}
