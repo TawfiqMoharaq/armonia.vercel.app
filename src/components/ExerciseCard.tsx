@@ -2,14 +2,10 @@ import React, { useState } from "react";
 import ExerciseRunner from "./ExerciseRunner";
 import type { Exercise } from "../data/exercises";
 
-type ExerciseCardProps = {
-  exercise: Exercise;
-};
+type ExerciseCardProps = { exercise: Exercise };
 
 export default function ExerciseCard({ exercise }: ExerciseCardProps) {
   const [start, setStart] = useState(false);
-
-  // اختر مصدر الـGIF: gif ثم demoGif، وإلا استخدم مسار عام من public
   const gifSrc = (exercise as any).gif || (exercise as any).demoGif || "/gifs/squat.gif";
 
   if (start && exercise.coachType === "squat") {
@@ -30,20 +26,15 @@ export default function ExerciseCard({ exercise }: ExerciseCardProps) {
           alt={exercise.name || "demo"}
           className="w-36 rounded-xl object-contain"
           onError={(e) => {
-            // لو تعطل المسار الحالي، حوّله تلقائيًا لـ /gifs/squat.gif (من مجلد public)
             const img = e.currentTarget as HTMLImageElement;
-            if (!img.src.endsWith("/gifs/squat.gif")) {
-              img.src = "/gifs/squat.gif";
-            }
+            if (!img.src.endsWith("/gifs/squat.gif")) img.src = "/gifs/squat.gif";
           }}
         />
         <div className="flex-1">
           <h3 className="text-lg font-bold">{exercise.name}</h3>
           {Array.isArray(exercise.tips) && exercise.tips.length > 0 && (
             <ul className="list-disc ms-5 mt-2 text-sm">
-              {exercise.tips.map((tip, index) => (
-                <li key={index}>{tip}</li>
-              ))}
+              {exercise.tips.map((tip, index) => <li key={index}>{tip}</li>)}
             </ul>
           )}
           {exercise.coachType === "squat" && (
