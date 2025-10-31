@@ -242,7 +242,24 @@ JSON_SCHEMA = {
     }
 }
 # ============================================
+EXERCISE_MAP = [
+    (("lumbar","erector","ظهر","قطني"), 
+     {"exercise": "Bird-Dog", "reps": "3×10", "tips": ["شد البطن", "ظهر ثابت", "حركة بطيئة"]}),
+    (("neck","cervical","عنق","رقبة"), 
+     {"exercise": "Chin Tucks", "reps": "3×8–10", "tips": ["ذقن للداخل", "بدون شد قوي"]}),
+    (("jaw","masseter","فك","صدغ"), 
+     {"exercise": "Masseter Relax", "reps": "5×10 ثوان", "tips": ["ترخية الفك", "تنفس هادئ"]}),
+]
 
+def infer_exercise(muscles):
+    if not muscles: 
+        return None
+    top = max(muscles, key=lambda m: m.prob)
+    t = f"{top.muscle_ar} {top.muscle_en} {top.region}".lower()
+    for keys, ex in EXERCISE_MAP:
+        if any(k in t for k in keys):
+            return ex
+    return None
 
 async def _handle_chat(payload: ChatRequest) -> ChatResponse:
     session_id = payload.session_id or uuid4().hex
