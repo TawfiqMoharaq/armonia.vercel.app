@@ -32,7 +32,7 @@ const Services: React.FC = () => {
           {/* Motion Correction Service */}
           <div className="bg-white w-[350px] shadow-lg rounded-2xl p-8 border border-[#E6F4F7] hover:shadow-xl transition flex flex-col">
             <h3 className="text-2xl font-semibold text-[#0A6D8B] mb-4">
-              🤸‍♂️ تصحيح الحركة بالذكاء الاصطناعي
+             تصحيح الحركة بالذكاء الاصطناعي
             </h3>
             <p className="text-[#4A5568] flex-grow">
               تحليل فوري لحركة الجسم وتصحيح الوضعيات بالذكاء الاصطناعي
@@ -51,7 +51,7 @@ const Services: React.FC = () => {
           {/* Family Guidance Service */}
           <div className="bg-white w-[350px] shadow-lg rounded-2xl p-8 border border-[#E6F4F7] hover:shadow-xl transition flex flex-col">
             <h3 className="text-2xl font-semibold text-[#0A6D8B] mb-4">
-              👨‍👩‍👦 الإرشاد الأسري الذكي
+            الإرشاد الأسري الذكي
             </h3>
             <p className="text-[#4A5568] flex-grow">
               استبيانات تفاعلية وتحليل ذكي لتقديم خطة إرشاد مناسبة
