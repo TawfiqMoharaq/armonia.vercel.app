@@ -1,6 +1,19 @@
 // src/components/ChatBox.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { exercises } from "../data/exercises";
+import ExerciseCard from "./ExerciseCard"; // إذا عندك الكارد في ملف مستقل
+
+/* ======================= إيجاد التمرين من قاعدة بياناتك ======================= */
+function findExercise(payload: any) {
+  if (!payload?.exercise) return null;
+  const name = String(payload.exercise).toLowerCase().trim();
+  return exercises.find(
+    (ex) =>
+      ex.name.toLowerCase() === name ||
+      (Array.isArray(ex.aliases) && ex.aliases.some((a: string) => a.toLowerCase() === name))
+  );
+}
 
 /* ======================= تنظيف واستخراج ======================= */
 // يحذف أسوار الكود (``` و ```json)
@@ -114,30 +127,6 @@ type ChatResponse = {
 /* ========================================================= */
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8080";
-
-/* =============== بطاقة التمرين المباشرة ================== */
-function ExerciseCard({ payload }: { payload: NonNullable<ChatResponse["payload"]> }) {
-  if (!payload || !payload.exercise) return null;
-  return (
-    <div className="mt-2 rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="px-4 py-3 border-b border-slate-200">
-        <div><span className="font-medium">التمرين:</span> {payload.exercise}</div>
-      </div>
-      <div className="px-4 py-3 space-y-2">
-        {payload.reps && <div><span className="font-medium">عدد/مدة:</span> {payload.reps}</div>}
-        {Array.isArray(payload.tips) && payload.tips.length > 0 && (
-          <div>
-            <div className="font-medium mb-1">نصائح:</div>
-            <ul className="list-disc ms-6 space-y-1">
-              {payload.tips.map((t, i) => <li key={i}>{t}</li>)}
-            </ul>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-/* ========================================================= */
 
 type Message = {
   id: string;
@@ -257,20 +246,14 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   };
 
   /* ============ إرسال تلقائي عند تحديد العضلة ============ */
-  /* ✅ إرسال تلقائي بمجرد تحديد ألم */
-/* ============ إرسال تلقائي عند تحديد العضلة ============ */
-const autoSentRef = useRef(false);
-useEffect(() => {
-  if (!autoSentRef.current && muscles && muscles.length > 0) {
-    autoSentRef.current = true;
-    const top = muscles.slice(0, 3).map((m) => m.muscle_ar).join("، ");
-    const prompt =
-      `حدّدت لي هذه المناطق: ${top}. أعطني تشخيصًا أوليًا بسيطًا وخطوات آمنة، ` +
-      `وإذا يوجد تمرين مناسب كبداية (مثل سكوات/بلانك/تمطيط لطيف) أرفقه معي في payload ` +
-      `(exercise, reps, tips) بدون أي JSON داخل نص العرض.`;
-    sendMessage(prompt);
-  }
-}, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
+  const autoSentRef = useRef(false);
+  useEffect(() => {
+    if (!autoSentRef.current && muscles && muscles.length > 0) {
+      autoSentRef.current = true;
+      // رسالة قصيرة جداً عشان الـbackend يقرر وبسرعة
+      sendMessage("شعور بسيط بالألم — خلنا نبدأ بخطة آمنة 💪");
+    }
+  }, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =============== إدخال المستخدم =============== */
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -289,47 +272,49 @@ useEffect(() => {
             حدّد مكان الألم أو اكتب سؤالك، وبنرد عليك بإرشادات مرتبة. ✨
           </div>
         ) : (
-          messages.map((m) => (
-            <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={[
-                  "max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm",
-                  m.role === "user" ? "bg-blue-50" : "bg-white/70",
-                ].join(" ")}
-              >
-                <ReactMarkdown
-                  components={{
-                    code: ({ inline, children, ...props }) =>
-                      inline ? (
-                        <code className="px-1 py-0.5 rounded bg-black/5" {...props}>
-                          {children}
-                        </code>
-                      ) : null,
-                    h3: ({ children }) => <h3 className="text-lg font-semibold mt-1 mb-1">{children}</h3>,
-                    h4: ({ children }) => <h4 className="text-base font-semibold mt-1 mb-1">{children}</h4>,
-                    ul: ({ children }) => <ul className="list-disc ms-6 space-y-1">{children}</ul>,
-                    ol: ({ children }) => <ol className="list-decimal ms-6 space-y-1">{children}</ol>,
-                    li: ({ children }) => <li className="leading-7">{children}</li>,
-                    p: ({ children }) => <p className="my-1">{children}</p>,
-                    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                    em: ({ children }) => <em className="opacity-90">{children}</em>,
-                    a: ({ children, href }) => (
-                      <a href={href} target="_blank" rel="noreferrer" className="underline">
-                        {children}
-                      </a>
-                    ),
-                  }}
+          messages.map((m) => {
+            const fullExercise = findExercise(m.raw?.payload);
+
+            return (
+              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={[
+                    "max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm",
+                    m.role === "user" ? "bg-blue-50" : "bg-white/70",
+                  ].join(" ")}
                 >
-                  {m.pretty}
-                </ReactMarkdown>
+                  <ReactMarkdown
+                    components={{
+                      code: ({ inline, children, ...props }) =>
+                        inline ? (
+                          <code className="px-1 py-0.5 rounded bg-black/5" {...props}>
+                            {children}
+                          </code>
+                        ) : null,
+                      h3: ({ children }) => <h3 className="text-lg font-semibold mt-1 mb-1">{children}</h3>,
+                      h4: ({ children }) => <h4 className="text-base font-semibold mt-1 mb-1">{children}</h4>,
+                      ul: ({ children }) => <ul className="list-disc ms-6 space-y-1">{children}</ul>,
+                      ol: ({ children }) => <ol className="list-decimal ms-6 space-y-1">{children}</ol>,
+                      li: ({ children }) => <li className="leading-7">{children}</li>,
+                      p: ({ children }) => <p className="my-1">{children}</p>,
+                      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                      em: ({ children }) => <em className="opacity-90">{children}</em>,
+                      a: ({ children, href }) => (
+                        <a href={href} target="_blank" rel="noreferrer" className="underline">
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {m.pretty}
+                  </ReactMarkdown>
 
-                {/* بطاقة التمرين لو موجودة */}
-                {m.raw?.payload && <ExerciseCard payload={m.raw.payload} />}
-
-
+                  {/* ✅ بطاقة التمرين من قاعدة بياناتك */}
+                  {fullExercise && <ExerciseCard exercise={fullExercise} />}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
         {busy && <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>}
       </div>
