@@ -257,18 +257,14 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   };
 
   /* ============ إرسال تلقائي عند تحديد العضلة ============ */
-  const autoSentRef = useRef(false);
-  useEffect(() => {
-    if (!autoSentRef.current && muscles && muscles.length > 0) {
-      autoSentRef.current = true;
-      const top = muscles.slice(0, 3).map((m) => m.muscle_ar).join("، ");
-      const prompt =
-        `حدّدت لي هذه المناطق: ${top}. أعطني تشخيصًا أوليًا بسيطًا وخطوات آمنة، ` +
-        `وإذا يوجد تمرين مناسب كبداية (مثل سكوات/بلانك/تمطيط لطيف) أرفقه معي في payload ` +
-        `(exercise, reps, tips) بدون أي JSON داخل نص العرض.`;
-      sendMessage(prompt);
-    }
-  }, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ✅ إرسال تلقائي بمجرد تحديد ألم */
+const autoSentRef = useRef(false);
+useEffect(() => {
+  if (!autoSentRef.current && muscles && muscles.length > 0) {
+    autoSentRef.current = true;
+    sendMessage("شعور بسيط بالألم — خلنا نبدأ بخطة آمنة 💪");
+  }
+}, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* =============== إدخال المستخدم =============== */
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
