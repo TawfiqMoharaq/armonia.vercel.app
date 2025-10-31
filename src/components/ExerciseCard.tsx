@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import ExerciseRunner from "./ExerciseRunner";
 import type { Exercise } from "../data/exercises";
 
@@ -7,17 +7,28 @@ type ExerciseCardProps = { exercise: Exercise };
 export default function ExerciseCard({ exercise }: ExerciseCardProps) {
   const [start, setStart] = useState(false);
 
-  // لا نضيف أي Fallback هنا — فقط القيمة الموجودة فعلاً في البيانات
-  const gifSrc: string | null =
-    ((exercise as any).gif as string | undefined) ??
-    ((exercise as any).demoGif as string | undefined) ??
-    null;
+  // 🔧 تطبيع مسار الـGIF:
+  const gifSrc: string | null = useMemo(() => {
+    const raw =
+      ((exercise as any).gif as string | undefined) ??
+      ((exercise as any).demoGif as string | undefined) ??
+      null;
+
+    if (!raw) return null;
+
+    // خارجي؟ اتركه كما هو
+    if (/^https?:\/\//i.test(raw)) return raw;
+
+    // شل كلمة public/ إن وجدت، وتأكّد من القوس الأمامي
+    const cleaned = raw.replace(/^public\//, "");
+    return cleaned.startsWith("/") ? cleaned : `/${cleaned}`;
+  }, [exercise]);
 
   if (start && exercise.coachType === "squat") {
     return (
       <ExerciseRunner
         title={exercise.name}
-        gif={gifSrc}               // ← يمرر null لو ما فيه
+        gif={gifSrc} // ← قد تكون null: Runner سيعرض المدرب فقط
         onClose={() => setStart(false)}
       />
     );
@@ -26,12 +37,16 @@ export default function ExerciseCard({ exercise }: ExerciseCardProps) {
   return (
     <div className="p-4 border rounded-3xl shadow bg-white/5">
       <div className="flex gap-4">
-        {/* صورة المعاينة تُعرض فقط إذا فيه GIF */}
+        {/* لا نعرض صورة المعاينة إلا إذا فيه GIF فعلاً */}
         {gifSrc && (
           <img
             src={gifSrc}
             alt={exercise.name || "demo"}
             className="w-36 rounded-xl object-contain"
+            // إن تعطّل الرابط نخفي الصورة بدل فallback:
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = "none";
+            }}
           />
         )}
 
@@ -40,7 +55,9 @@ export default function ExerciseCard({ exercise }: ExerciseCardProps) {
 
           {Array.isArray(exercise.tips) && exercise.tips.length > 0 && (
             <ul className="list-disc ms-5 mt-2 text-sm">
-              {exercise.tips.map((tip, i) => <li key={i}>{tip}</li>)}
+              {exercise.tips.map((tip, i) => (
+                <li key={i}>{tip}</li>
+              ))}
             </ul>
           )}
 
