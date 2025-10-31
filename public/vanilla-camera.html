@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>كاميرا + تتبّع الجسم</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:0;padding:24px;background:#f7f9fb}
+    .wrap{display:grid;grid-template-columns:1fr;gap:16px}
+    @media (min-width:900px){.wrap{grid-template-columns:1fr 1fr}}
+    .card{position:relative;border:1px solid #e5e7eb;background:#000;border-radius:20px;overflow:hidden}
+    canvas,video{width:100%;height:auto;display:block}
+    .hud{position:absolute;top:12px;left:12px;color:#fff;background:#0009;padding:8px 12px;border-radius:12px}
+    .error{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:#000a;padding:16px;text-align:center;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- الكاميرا + الرسم -->
+    <div class="card">
+      <video id="video" playsinline muted class="hidden"></video>
+      <canvas id="canvas"></canvas>
+      <div id="hud" class="hud">Reps: <b id="reps">0</b> | Knee: <span id="ka">—</span>° | Back: <span id="ba">—</span>°</div>
+      <div id="err" class="error" style="display:none"></div>
+    </div>
+
+    <!-- مثال GIF/شرح (اختياري) -->
+    <div class="card" style="background:#fff;border-color:#e5e7eb">
+      <img src="/gifs/squat.gif" alt="demo" style="width:100%;display:block;object-fit:contain;background:#fff" />
+    </div>
+  </div>
+
+  <script type="module">
+    import {
+      DrawingUtils,
+      FilesetResolver,
+      PoseLandmarker,
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22";
+
+    const MODEL_CANDIDATES = [
+      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/latest/pose_landmarker_lite.task",
+      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float32/latest/pose_landmarker_full.task",
+    ];
+    const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
+
+    const KNEE_UP_THRESHOLD = 160;
+    const KNEE_DOWN_MIN = 70;
+    const KNEE_DOWN_MAX = 100;
+    const BACK_SAFE_THRESHOLD = 150;
+
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const errBox = document.getElementById("err");
+    const repsEl = document.getElementById("reps");
+    const kaEl = document.getElementById("ka");
+    const baEl = document.getElementById("ba");
+
+    let landmarker = null;
+    let raf = 0;
+    let wasDown = false;
+    let reps = 0;
+
+    const toDeg = (r) => (r * 180) / Math.PI;
+    const vAng = (a,c,b) => {
+      if (!a||!b||!c) return null;
+      const v1=[a.x-c.x,a.y-c.y,a.z-c.z], v2=[b.x-c.x,b.y-c.y,b.z-c.z];
+      const dot=v1[0]*v2[0]+v1[1]*v2[1]+v1[2]*v2[2];
+      const m1=Math.hypot(...v1), m2=Math.hypot(...v2);
+      if (!m1||!m2) return null;
+      const cos=Math.min(Math.max(dot/(m1*m2),-1),1);
+      return toDeg(Math.acos(cos));
+    };
+    const pickLeg = (lms) => {
+      const L={shoulder:11,hip:23,knee:25,ankle:27}, R={shoulder:12,hip:24,knee:26,ankle:28};
+      const vis=(i)=>lms[i]?.visibility??0;
+      const s=(s)=>vis(s.hip)+vis(s.knee)+vis(s.ankle);
+      return s(L)>=s(R)?L:R;
+    };
+
+    function showError(msg){
+      errBox.style.display="flex";
+      errBox.textContent = msg;
+    }
+    function hideError(){ errBox.style.display="none"; }
+
+    async function getStream(){
+      const trials = [
+        { video:{facingMode:"user", width:{ideal:960}, height:{ideal:720}}, audio:false },
+        { video:true, audio:false }
+      ];
+      for (const c of trials) {
+        try { return await navigator.mediaDevices.getUserMedia(c); }
+        catch(e){ /* try next */ }
+      }
+      throw new Error("تعذر تشغيل الكاميرا. تأكد من الإذن ووجود كاميرا وHTTPS.");
+    }
+
+    async function init(){
+      try{
+        if (!navigator.mediaDevices?.getUserMedia)
+          throw new Error("المتصفح لا يدعم الكاميرا (getUserMedia).");
+        if (!window.isSecureContext)
+          throw new Error("الصفحة ليست آمنة (HTTPS). افتح عبر https أو localhost.");
+
+        const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+
+        // جرّب GPU ثم CPU + كل الموديلات
+        let lastErr=null;
+        for (const delegate of ["GPU","CPU"]) {
+          for (const url of MODEL_CANDIDATES) {
+            try {
+              landmarker = await PoseLandmarker.createFromOptions(fileset, {
+                baseOptions: { modelAssetPath: url },
+                runningMode: "VIDEO",
+                numPoses: 1,
+                delegate
+              });
+              console.log("[PoseLandmarker] loaded:", delegate, url);
+              lastErr=null; break;
+            } catch(e){ lastErr=e; console.warn("load fail", delegate, url, e); }
+          }
+          if(!lastErr) break;
+        }
+        if (!landmarker) throw lastErr || new Error("فشل تحميل نموذج التتبّع.");
+
+        const stream = await getStream();
+        video.srcObject = stream;
+        await video.play();
+
+        const sync = () => {
+          if (video.videoWidth && video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+          }
+        };
+        sync(); video.addEventListener("loadedmetadata", sync);
+
+        hideError();
+        loop();
+      }catch(e){
+        console.error(e);
+        showError(e.message || "تعذر بدء تشغيل المدرب.");
+      }
+    }
+
+    function loop(){
+      const now = performance.now();
+      const out = landmarker.detectForVideo(video, now);
+
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+      if (out.landmarks.length){
+        const lms = out.landmarks[0];
+        // رسم نقاط بسيطة:
+        ctx.fillStyle="#18A4B8";
+        for(const p of lms) if ((p.visibility??0) > 0.65) ctx.fillRect(p.x*canvas.width-2, p.y*canvas.height-2, 4,4);
+
+        // حساب الزوايا + العد
+        const leg = pickLeg(lms);
+        const hip=lms[leg.hip], knee=lms[leg.knee], ankle=lms[leg.ankle], shoulder=lms[leg.shoulder];
+
+        const k = vAng(hip,knee,ankle);
+        const b = vAng(shoulder,hip,knee);
+
+        if (k!=null){
+          kaEl.textContent = Math.round(k);
+          if (k>=KNEE_DOWN_MIN && k<=KNEE_DOWN_MAX) wasDown = true;
+          if (k>=KNEE_UP_THRESHOLD && wasDown){ wasDown=false; reps+=1; repsEl.textContent=reps; }
+        } else { kaEl.textContent="—"; }
+
+        if (b!=null){
+          baEl.textContent = Math.round(b);
+          // تقدر تعرض تحذير إذا b < BACK_SAFE_THRESHOLD
+        } else { baEl.textContent="—"; }
+      }
+
+      raf = requestAnimationFrame(loop);
+    }
+
+    init();
+    // تنظيف عند مغادرة الصفحة
+    window.addEventListener("beforeunload", ()=>{
+      cancelAnimationFrame(raf);
+      const s = video.srcObject; if (s) s.getTracks().forEach(t=>t.stop());
+      landmarker?.close?.();
+    });
+  </script>
+</body>
+</html>
