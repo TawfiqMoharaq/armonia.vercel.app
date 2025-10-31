@@ -7,7 +7,7 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
-// وصلات BlazePose (33 landmark) — نعرّفها محلياً لأن tasks-vision لا يصدّرها
+// وصلات الهيكل (BlazePose 33 نقطة)
 const POSE_CONNECTIONS: Array<[number, number]> = [
   [0,1],[1,2],[2,3],[3,7],
   [0,4],[4,5],[5,6],[6,8],
@@ -19,17 +19,18 @@ const POSE_CONNECTIONS: Array<[number, number]> = [
   [24,26],[26,28],[28,30],[28,32],
 ];
 
-// ✅ تحميل النماذج محلياً من public
+// نماذج/WASM محلية
 const MODEL_CANDIDATES = ["/models/pose_landmarker_lite.task"];
-
-// ✅ تحميل WASM محلياً أيضاً
 const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
 
-// عتبات العدّ والتنبيه
+// إعدادات العد والتنبيه
 const KNEE_UP_THRESHOLD = 160;
 const KNEE_DOWN_MIN = 70;
 const KNEE_DOWN_MAX = 100;
 const BACK_SAFE_THRESHOLD = 150;
+
+// نعرض الصورة معكوسة (كاميرا أمامية)
+const MIRROR = true;
 
 type AngleSample = { knee: number; back: number };
 const toDeg = (r: number) => (r * 180) / Math.PI;
@@ -187,17 +188,40 @@ export default function ExerciseCoach() {
     const now = performance.now();
     const result = landmarker.detectForVideo(video, now);
 
+    // 1) امسح الفريم
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // 2) ارسم فريم الفيديو على الكانفس (مع عكس أفقي للكاميرا الأمامية)
+    ctx.save();
+    if (MIRROR) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    // 3) ارسم الهيكل فوق الفيديو
     if (result.landmarks.length) {
       const landmarks = result.landmarks[0];
+
+      // نخلي الرسم بالأبيض مع ظل بسيط عشان يكون واضح
+      ctx.save();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "white";
+      ctx.fillStyle = "white";
+      ctx.shadowColor = "rgba(0,0,0,0.8)";
+      ctx.shadowBlur = 6;
+
       const drawer = new DrawingUtils(ctx);
+      drawer.drawConnectors(landmarks, POSE_CONNECTIONS);
+      drawer.drawLandmarks(landmarks, {
+        radius: 4,
+        visibilityMin: 0.65,
+        fillColor: "white",
+      });
+      ctx.restore();
 
-      // رسم الوصلات + النقاط
-      drawer.drawConnectors(landmarks, POSE_CONNECTIONS, { lineWidth: 3 });
-      drawer.drawLandmarks(landmarks, { radius: 4, visibilityMin: 0.65, fillColor: "#18A4B8" });
-
-      // حساب الزوايا
+      // 4) حساب الزوايا والعدّ
       const leg = pickLeg(landmarks);
       const hip = landmarks[leg.hip];
       const knee = landmarks[leg.knee];
@@ -264,7 +288,7 @@ export default function ExerciseCoach() {
         </button>
       )}
 
-      {/* نخلي الفيديو مخفي ونرسم فوقه */}
+      {/* الفيديو ممكن يبقى مخفي — نأخذ منه الفريمات فقط */}
       <video ref={videoRef} className="hidden" playsInline muted />
       <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
@@ -284,7 +308,7 @@ export default function ExerciseCoach() {
         </div>
       </div>
 
-      {/* شريط انتظار أو رسالة خطأ */}
+      {/* شريط انتظار/أخطاء */}
       {(!isReady || cameraError) && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
           <p className="text-sm leading-relaxed" dir="rtl">
@@ -294,7 +318,6 @@ export default function ExerciseCoach() {
         </div>
       )}
 
-      {/* تنبيه وضعية الظهر */}
       {backWarning && running && !cameraError && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg">
           حافظ على استقامة ظهرك!
