@@ -324,9 +324,8 @@ useEffect(() => {
                 </ReactMarkdown>
 
                 {/* بطاقة التمرين لو موجودة */}
-                {m.raw?.payload?.exercise?.toLowerCase() === "squat" && (
-  <ExerciseCoach />
-)}
+                {m.raw?.payload && <ExerciseCard payload={m.raw.payload} />}
+
 
               </div>
             </div>
