@@ -13,26 +13,33 @@ function pickExerciseFromPayload(payload: any): Exercise | null {
 }
 
 /* ======================= تنظيف واستخراج ======================= */
+// يحذف أسوار الكود (``` و ```json)
 const stripCodeFences = (t: string) =>
   (t ?? "")
     .replace(/```json[\s\S]*?```/gi, "")
     .replace(/```[\s\S]*?```/g, "");
 
+// يحاول إزالة بقايا مفاتيح JSON أينما ظهرت داخل النص
 const stripJsonKeysEverywhere = (t: string) =>
   t
+    // امسح كلمة json المتناثرة
     .replace(/\bjson\b/gi, "")
+    // امسح أزواج "المفتاح":القيمة الشائعة (ui_text, payload, exercise, reps, tips)
     .replace(
       /"?(ui_text|payload|exercise|reps|tips)"?\s*:\s*(\{[^}]*\}|\[[^\]]*\]|"(?:\\.|[^"\\])*"|[^,}\n]+)\s*,?/gi,
       ""
     )
+    // امسح أي كتل { ... } طويلة (سطر واحد أو متعددة الأسطر)
     .replace(/\{[\s\S]{10,}\}/g, "");
 
+// تنظيف شامل
 const cleanModelText = (t: string) => {
   const noFences = stripCodeFences(t ?? "");
   const noJsonLeftovers = stripJsonKeysEverywhere(noFences);
   return noJsonLeftovers.replace(/\n{3,}/g, "\n\n").trim();
 };
 
+// محاولات آمنة لفك JSON من نص
 const tryParseJson = (s: unknown): any | null => {
   if (typeof s !== "string") return null;
   try {
@@ -42,17 +49,22 @@ const tryParseJson = (s: unknown): any | null => {
   }
 };
 
+// يقتنص قيمة ui_text من سلسلة تشبه JSON حتى لو مو صالحة بالكامل
 const regexExtractUiText = (s: string): string | null => {
   const m = s.match(/"ui_text"\s*:\s*"(.*?)"/s);
   if (!m) return null;
+  // نفك الهروب البسيط داخل السلسلة
   return m[1].replace(/\\"/g, '"').replace(/\\n/g, "\n");
 };
 
+// انتقاء نص العرض والـpayload من استجابة قد تكون مشوّهة
 const extractUiAndPayload = (data: any): { ui: string; payload?: any } => {
+  // الحالة الصحيحة
   if (data && typeof data === "object") {
     if (typeof data.ui_text === "string" && data.ui_text.trim()) {
       return { ui: data.ui_text, payload: data.payload };
     }
+    // بعض السيرفرات ترجع reply كسلسلة JSON
     if (typeof data.reply === "string") {
       const parsed = tryParseJson(data.reply);
       if (parsed && typeof parsed.ui_text === "string") {
@@ -60,9 +72,11 @@ const extractUiAndPayload = (data: any): { ui: string; payload?: any } => {
       }
       const picked = regexExtractUiText(data.reply);
       if (picked) return { ui: picked, payload: data.payload };
+      // لو reply نص عادي
       return { ui: data.reply, payload: data.payload };
     }
   }
+  // لو اللي جاي سلسلة JSON كاملة
   if (typeof data === "string") {
     const parsed = tryParseJson(data);
     if (parsed && typeof parsed.ui_text === "string") {
@@ -101,7 +115,7 @@ type ChatResponse = {
     tips?: string[];
     [k: string]: any;
   };
-  reply?: string;
+  reply?: string; // أحيانًا ترجع كسلسلة JSON
   session_id: string;
   turns: number;
   usedOpenAI: boolean;
@@ -114,8 +128,8 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8080";
 type Message = {
   id: string;
   role: "user" | "assistant";
-  text: string;
-  pretty: string;
+  text: string;   // النص الخام (قبل التنظيف)
+  pretty: string; // النص المنسّق للعرض (بعد التنظيف القوي)
   raw?: ChatResponse;
 };
 
@@ -129,9 +143,6 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   const [busy, setBusy] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-
-  // ✅ لوحة التمرين/التصحيح أسفل الشات
-  const [currentExercise, setCurrentExercise] = useState<Exercise | null>(null);
 
   useEffect(() => {
     console.log("VITE_API_BASE =", API_BASE);
@@ -173,6 +184,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         throw new Error(`HTTP ${res.status} ${errText}`);
       }
 
+      // حاول JSON، وإلا اقرأ كنص
       let data: ChatResponse | string;
       try {
         data = (await res.json()) as ChatResponse;
@@ -184,9 +196,14 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         setSessionId(data.session_id);
       }
 
+      // استخرج ui_text/ payload مهما كان شكل الاستجابة
       const { ui, payload } = extractUiAndPayload(data);
+      // نظّف بقوة
       let pretty = cleanModelText(ui);
-      if (!pretty?.trim()) {
+
+      // fallback مضمون
+      if (!pretty || !pretty.trim()) pretty = ui?.trim() || "";
+      if (!pretty || !pretty.trim()) {
         pretty = "تم تجهيز إرشاداتك. ابدأ بإحماء خفيف (5–10 دقائق) ثم اتبع الخطوات المقترحة.";
       }
 
@@ -197,11 +214,8 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         pretty,
         raw: typeof data === "object" ? { ...(data as any), payload: (payload ?? (data as any).payload) } : undefined,
       };
-      setMessages((m) => [...m, botMsg]);
 
-      // ✅ حدّث لوحة التمرين أسفل الشات
-      const ex = pickExerciseFromPayload((botMsg.raw as any)?.payload);
-      if (ex) setCurrentExercise(ex);
+      setMessages((m) => [...m, botMsg]);
     } catch (err) {
       console.error(err);
       const fallback =
@@ -233,6 +247,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   useEffect(() => {
     if (!autoSentRef.current && muscles && muscles.length > 0) {
       autoSentRef.current = true;
+      // رسالة قصيرة جداً — الباكيند سيعتمد على العضلات الممرّرة في context
       sendMessage("شعور بسيط بالألم — خلنا نبدأ بخطة آمنة 💪");
     }
   }, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -254,52 +269,52 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
             حدّد مكان الألم أو اكتب سؤالك، وبنرد عليك بإرشادات مرتبة. ✨
           </div>
         ) : (
-          messages.map((m) => (
-            <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={[
-                  "max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm",
-                  m.role === "user" ? "bg-blue-50" : "bg-white/70",
-                ].join(" ")}
-              >
-                <ReactMarkdown
-                  components={{
-                    code: ({ inline, children, ...props }) =>
-                      inline ? (
-                        <code className="px-1 py-0.5 rounded bg-black/5" {...props}>
-                          {children}
-                        </code>
-                      ) : null,
-                    h3: ({ children }) => <h3 className="text-lg font-semibold mt-1 mb-1">{children}</h3>,
-                    h4: ({ children }) => <h4 className="text-base font-semibold mt-1 mb-1">{children}</h4>,
-                    ul: ({ children }) => <ul className="list-disc ms-6 space-y-1">{children}</ul>,
-                    ol: ({ children }) => <ol className="list-decimal ms-6 space-y-1">{children}</ol>,
-                    li: ({ children }) => <li className="leading-7">{children}</li>,
-                    p: ({ children }) => <p className="my-1">{children}</p>,
-                    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                    em: ({ children }) => <em className="opacity-90">{children}</em>,
-                    a: ({ children, href }) => (
-                      <a href={href} target="_blank" rel="noreferrer" className="underline">
-                        {children}
-                      </a>
-                    ),
-                  }}
+          messages.map((m) => {
+            const fullExercise = pickExerciseFromPayload(m.raw?.payload);
+
+            return (
+              <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={[
+                    "max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm",
+                    m.role === "user" ? "bg-blue-50" : "bg-white/70",
+                  ].join(" ")}
                 >
-                  {m.pretty}
-                </ReactMarkdown>
+                  <ReactMarkdown
+                    components={{
+                      code: ({ inline, children, ...props }) =>
+                        inline ? (
+                          <code className="px-1 py-0.5 rounded bg-black/5" {...props}>
+                            {children}
+                          </code>
+                        ) : null,
+                      h3: ({ children }) => <h3 className="text-lg font-semibold mt-1 mb-1">{children}</h3>,
+                      h4: ({ children }) => <h4 className="text-base font-semibold mt-1 mb-1">{children}</h4>,
+                      ul: ({ children }) => <ul className="list-disc ms-6 space-y-1">{children}</ul>,
+                      ol: ({ children }) => <ol className="list-decimal ms-6 space-y-1">{children}</ol>,
+                      li: ({ children }) => <li className="leading-7">{children}</li>,
+                      p: ({ children }) => <p className="my-1">{children}</p>,
+                      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                      em: ({ children }) => <em className="opacity-90">{children}</em>,
+                      a: ({ children, href }) => (
+                        <a href={href} target="_blank" rel="noreferrer" className="underline">
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {m.pretty}
+                  </ReactMarkdown>
+
+                  {/* ✅ بطاقة التمرين (من قاعدة بياناتك) */}
+                  {fullExercise && <ExerciseCard exercise={fullExercise} />}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
         {busy && <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>}
       </div>
-
-      {/* ✅ لوحة التمرين/التصحيح أسفل الشات */}
-      {currentExercise && (
-        <div className="mt-2">
-          <ExerciseCard exercise={currentExercise} />
-        </div>
-      )}
 
       {/* الإدخال */}
       <div className="flex items-end gap-2">
