@@ -20,7 +20,11 @@ const POSE_CONNECTIONS: Array<[number, number]> = [
 ];
 
 // نماذج/WASM محلية
-const MODEL_CANDIDATES = ["/models/pose_landmarker_lite.task"];
+const MODEL_CANDIDATES = [
+  "/models/pose_landmarker_full.task", // جرب الكامل أولاً
+  "/models/pose_landmarker_lite.task", // لو فشل/بطيء يرجع للايت
+];
+
 const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
 
 // إعدادات العد والتنبيه
