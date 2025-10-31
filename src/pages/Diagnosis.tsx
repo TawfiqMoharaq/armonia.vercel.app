@@ -59,6 +59,30 @@ const DEFAULT_CIRCLE: CircleSelection = {
   radius: 0.07,
 };
 
+// 🔎 محلّل مرادفات الأسماء عشان نضمن إيجاد التمرين حتى لو الاسم مختلف بسيط
+function resolveExercise(name?: string | null): Exercise | null {
+  if (!name) return null;
+  const tryNames = [
+    name,
+    // سكوات شائع:
+    /squat/i.test(name) ? "Bodyweight Squat" : "",
+    /سكوات|سكوّت/i.test(name) ? "Bodyweight Squat" : "",
+    // بلانك:
+    /plank/i.test(name) ? "Plank" : "",
+    /بلانك/i.test(name) ? "Plank" : "",
+    // Chin Tuck:
+    /chin\s*tuck/i.test(name) ? "Chin Tuck" : "",
+    /ارجاع الذقن|إرجاع الذقن/i.test(name) ? "Chin Tuck" : "",
+  ].filter(Boolean) as string[];
+
+  for (const n of tryNames) {
+    const hit = findExerciseByName(n);
+    if (hit) return hit;
+  }
+  // فشل: رجّع null وخلي الصفحة تتصرف (افتراضي/لاحقًا)
+  return null;
+}
+
 export default function Diagnosis() {
   const [side, setSide] = useState<BodySideKey>("front");
   const [circle, setCircle] = useState<CircleSelection>(DEFAULT_CIRCLE);
@@ -195,10 +219,20 @@ export default function Diagnosis() {
 
   // التمرين الذي سنعرضه تحت الشات (افتراضي أو من الشات)
   const [recommended, setRecommended] = useState<Exercise | null>(null);
+
+  // ✅ لو تغيّر الافتراضي وكان عندنا كارد فاضي، نعرضه (بدون ما نكسر اقتراح الشات لاحقًا)
   useEffect(() => {
-    // كل ما تغيّرت نتائج المجسّم نرجّع الافتراضي (لو ما فيه اقتراح من الشات)
-    if (!recommended) setRecommended(defaultExercise);
+    if (!recommended && defaultExercise) {
+      setRecommended(defaultExercise);
+    }
   }, [defaultExercise, recommended]);
+
+  // ✅ لو تغيّرت نتائج المجسّم جذريًا والكارد ما زال فاضي، جرّب مرّة ثانية
+  useEffect(() => {
+    if (!recommended && defaultExercise) {
+      setRecommended(defaultExercise);
+    }
+  }, [results]); // يقوّي ظهور الكارد بعد أول تحليل
 
   return (
     <div className="bg-[#F7FAFC] min-h-screen flex flex-col justify-between">
@@ -206,7 +240,8 @@ export default function Diagnosis() {
 
       <section className="max-w-5xl mx-auto p-6 space-y-8" dir="rtl">
         <header className="text-center space-y-3">
-          <h1 className="text-زxl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
+          {/* 🔧 تصحيح خط مطبعي: كان text-زxl */}
+          <h1 className="text-2xl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
           <p className="text-gray-600 text-sm md:text-base">{INTRO_TEXT}</p>
         </header>
 
@@ -380,9 +415,8 @@ export default function Diagnosis() {
             autoStartAdvice
             autoStartPrompt={autoStartPrompt}
             sessionKey={`${painLevel}-${intensityLevel}`}
-            // ✅ إذا ذكر الشات تمرينًا بالاسم (سكوات/ثايز...) نعرضه فورًا
             onSuggestedExercise={(name) => {
-              const hit = findExerciseByName(name) || defaultExercise || null;
+              const hit = resolveExercise(name) || defaultExercise || null;
               setRecommended(hit);
             }}
           />
