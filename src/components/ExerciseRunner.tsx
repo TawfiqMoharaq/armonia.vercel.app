@@ -19,7 +19,11 @@ export default function ExerciseRunner({ gif, title, onClose }: ExerciseRunnerPr
         )}
       </div>
 
-      <div className={`grid gap-4 ${hasGif ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"}`}>
+      <div
+        className={`grid gap-4 md:items-start ${
+          hasGif ? "grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,420px)]" : "grid-cols-1"
+        }`}
+      >
         {/* GIF يسار (شرطي) */}
         {hasGif && (
           <div className="rounded-3xl shadow border bg-white flex items-center justify-center">
@@ -32,7 +36,7 @@ export default function ExerciseRunner({ gif, title, onClose }: ExerciseRunnerPr
         )}
 
         {/* المدرب */}
-        <div className="w-full">
+        <div className="w-full md:w-[420px] mx-auto md:mx-0">
           <ExerciseCoach />
         </div>
       </div>
