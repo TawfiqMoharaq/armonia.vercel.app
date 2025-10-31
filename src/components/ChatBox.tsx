@@ -121,7 +121,6 @@ function ExerciseCard({ payload }: { payload: NonNullable<ChatResponse["payload"
   return (
     <div className="mt-2 rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="px-4 py-3 border-b border-slate-200">
-        <div className="text-base font-semibold">تمرين مقترح</div>
       </div>
       <div className="px-4 py-3 space-y-2">
         <div><span className="font-medium">التمرين:</span> {payload.exercise}</div>
@@ -328,7 +327,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
             </div>
           ))
         )}
-        {busy && <div className="text-slate-500 text-sm text-center py-2">جاري إعداد ردك…</div>}
+        {busy && <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>}
       </div>
 
       {/* الإدخال */}
