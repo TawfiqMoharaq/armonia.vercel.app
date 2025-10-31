@@ -349,7 +349,12 @@ export default function ExerciseCoach() {
         </button>
 
         <video ref={videoRef} className="hidden" playsInline muted />
-        <canvas ref={canvasRef} className="w-full h-full object-cover" />
+        <canvas
+  ref={canvasRef}
+  className="object-contain rounded-2xl"
+  style={{ width: 340, height: 255 }}
+/>
+
 
         {/* عدّاد وزوايا */}
         <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
