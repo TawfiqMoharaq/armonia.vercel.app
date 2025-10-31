@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import * as poseDetection from "@tensorflow-models/pose-detection";
+import * as posedetection from "@tensorflow-models/pose-detection";
 import "@tensorflow/tfjs-backend-webgl";
 import * as tf from "@tensorflow/tfjs-core";
 import type { Keypoint } from "@tensorflow-models/pose-detection";
@@ -15,7 +15,8 @@ function toDeg(value: number) {
   return (value * 180) / Math.PI;
 }
 
-function angle(a: Keypoint, c: Keypoint, b: Keypoint) {
+function angle(a?: Keypoint, c?: Keypoint, b?: Keypoint) {
+  if (!a || !b || !c) return null;
   const v1 = [a.x - c.x, a.y - c.y];
   const v2 = [b.x - c.x, b.y - c.y];
   const dot = v1[0] * v2[0] + v1[1] * v2[1];
@@ -27,7 +28,7 @@ function angle(a: Keypoint, c: Keypoint, b: Keypoint) {
 }
 
 function byName(keypoints: Keypoint[], name: string) {
-  return keypoints.find((k) => k.name === name) as Keypoint;
+  return keypoints.find((k) => (k as any).name === name);
 }
 
 function pickLeg(keypoints: Keypoint[]) {
@@ -43,7 +44,7 @@ function pickLeg(keypoints: Keypoint[]) {
     knee: byName(keypoints, "right_knee"),
     ankle: byName(keypoints, "right_ankle"),
   };
-  const score = (point?: Keypoint) => point?.score ?? 0;
+  const score = (p?: Keypoint) => p?.score ?? 0;
   const leftScore = score(left.hip) + score(left.knee) + score(left.ankle);
   const rightScore = score(right.hip) + score(right.knee) + score(right.ankle);
   return leftScore >= rightScore ? left : right;
@@ -65,7 +66,7 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
 
   const wasDownRef = useRef(false);
   const rafRef = useRef<number | null>(null);
-  const detectorRef = useRef<poseDetection.PoseDetector | null>(null);
+  const detectorRef = useRef<posedetection.PoseDetector | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -79,15 +80,17 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
         setBackAngle(null);
         setBackWarning(false);
 
+        // TF backend
         if (tf.getBackend() !== "webgl") {
           await tf.setBackend("webgl");
         }
         await tf.ready();
 
-       const detector = await posedetection.createDetector(
+        // ✅ MoveNet with correct enum (no "Lightning" string)
+        const detector = await posedetection.createDetector(
           posedetection.SupportedModels.MoveNet,
           {
-            modelType: posedetection.movenet.modelType.SINGLEPOSE_LIGHTNING, // ✅
+            modelType: posedetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
             enableSmoothing: true,
           }
         );
@@ -98,7 +101,11 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
         }
 
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
+          video: {
+            facingMode: "user",
+            width: { ideal: 960 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
 
@@ -112,13 +119,12 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
         await video.play();
 
         const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          throw new Error("تعذر الحصول على سياق الرسم الثنائية الأبعاد.");
-        }
+        if (!ctx) throw new Error("تعذر الحصول على سياق الرسم الثنائية الأبعاد.");
 
         const sync = () => {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+          if (!video) return;
+          canvas.width = video.videoWidth || canvas.width;
+          canvas.height = video.videoHeight || canvas.height;
         };
         syncHandler = sync;
         sync();
@@ -133,13 +139,17 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
             return;
           }
 
-          const poses = await currentDetector.estimatePoses(video, { flipHorizontal: true });
+          const poses = await currentDetector.estimatePoses(video, {
+            flipHorizontal: true, // للكاميرا الأمامية
+          });
+
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-          if (poses[0]?.keypoints) {
-            const kps = poses[0].keypoints;
+          if (poses[0]?.keypoints?.length) {
+            const kps = poses[0].keypoints as Keypoint[];
 
+            // نقاط مفصلية
             ctx.fillStyle = "#18A4B8";
             for (const kp of kps) {
               if ((kp.score ?? 0) > 0.5) {
@@ -160,7 +170,7 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
                 }
                 if (rounded >= KNEE_UP_THRESHOLD && wasDownRef.current) {
                   wasDownRef.current = false;
-                  setRepCount((count) => count + 1);
+                  setRepCount((c) => c + 1);
                 }
               }
 
@@ -182,8 +192,10 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
         const name = e?.name ?? "";
         if (name === "NotAllowedError") {
           setError("تم رفض صلاحية الكاميرا. يرجى السماح بالوصول من إعدادات المتصفح.");
+        } else if (e?.message) {
+          setError(e.message);
         } else {
-          setError(e?.message ?? "حدث خطأ أثناء تهيئة مدرب التمرين.");
+          setError("حدث خطأ أثناء تهيئة مدرب التمرين.");
         }
       }
     };
@@ -192,6 +204,7 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
 
     return () => {
       active = false;
+
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
@@ -204,14 +217,12 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
           video.removeEventListener("resize", syncHandler);
         }
         const mediaStream = video.srcObject as MediaStream | null;
-        if (mediaStream) {
-          mediaStream.getTracks().forEach((track) => track.stop());
-        }
+        if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
         video.pause();
         video.srcObject = null;
       }
 
-      detectorRef.current?.dispose();
+      detectorRef.current?.dispose?.();
       detectorRef.current = null;
     };
   }, [coachType]);
