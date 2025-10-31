@@ -322,7 +322,10 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
                 </ReactMarkdown>
 
                 {/* بطاقة التمرين لو موجودة */}
-                {m.raw?.payload && <ExerciseCard payload={m.raw.payload} />}
+                {m.raw?.payload?.exercise?.toLowerCase() === "squat" && (
+  <ExerciseCoach />
+)}
+
               </div>
             </div>
           ))
