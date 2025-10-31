@@ -1,3 +1,4 @@
+// ExerciseCoach.tsx
 import React, { useEffect, useRef, useState } from "react";
 import {
   DrawingUtils,
@@ -6,7 +7,6 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
-// ===== إعدادات النماذج/WASM =====
 const MODEL_CANDIDATES = [
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/latest/pose_landmarker_lite.task",
@@ -14,13 +14,11 @@ const MODEL_CANDIDATES = [
 ];
 const WASM_BASE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
 
-// ===== عتبات القياس =====
 const KNEE_UP_THRESHOLD = 160;
 const KNEE_DOWN_MIN = 70;
 const KNEE_DOWN_MAX = 100;
 const BACK_SAFE_THRESHOLD = 150;
 
-// ===== أدوات مساعدة =====
 type AngleSample = { knee: number; back: number };
 const toDeg = (r: number) => (r * 180) / Math.PI;
 
@@ -57,7 +55,6 @@ function explainGetUserMediaError(err: any): string {
   }
 }
 
-// ====== المكوّن ======
 export default function ExerciseCoach() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -68,8 +65,8 @@ export default function ExerciseCoach() {
   const wasDownRef = useRef(false);
   const lastSampleRef = useRef<AngleSample>({ knee: -1, back: -1 });
 
-  const [isReady, setIsReady] = useState(false);       // نماذج/WASM جاهزة
-  const [running, setRunning] = useState(false);       // الكاميرا تعمل
+  const [isReady, setIsReady] = useState(false);
+  const [running, setRunning] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
   const [repCount, setRepCount] = useState(0);
@@ -77,11 +74,9 @@ export default function ExerciseCoach() {
   const [backAngle, setBackAngle] = useState<number | null>(null);
   const [backWarning, setBackWarning] = useState(false);
 
-  // تحميل ملفات الرؤية + إنشاء PoseLandmarker عند أول مرة فقط
   useEffect(() => {
     let cancelled = false;
-
-    async function createLandmarker() {
+    (async () => {
       try {
         if (!window.isSecureContext) {
           setCameraError("هذه الصفحة ليست آمنة (HTTPS مطلوب). استخدم https أو localhost.");
@@ -90,7 +85,6 @@ export default function ExerciseCoach() {
         const fileset = await FilesetResolver.forVisionTasks(WASM_BASE_URL);
         if (cancelled) return;
 
-        // جرّب GPU ثم CPU + جميع النماذج
         let lastErr: any;
         for (const delegate of ["GPU", "CPU"] as const) {
           for (const url of MODEL_CANDIDATES) {
@@ -110,13 +104,10 @@ export default function ExerciseCoach() {
       } catch (e: any) {
         setCameraError(e?.message ?? "تعذر تهيئة نماذج MediaPipe.");
       }
-    }
-
-    createLandmarker();
+    })();
     return () => { cancelled = true; };
   }, []);
 
-  // بدء الكاميرا بعد ضغطة زر (لتجنب حظر autoplay)
   async function startCamera() {
     try {
       setCameraError(null);
@@ -126,17 +117,11 @@ export default function ExerciseCoach() {
       setBackWarning(false);
       wasDownRef.current = false;
 
-      if (!navigator.mediaDevices?.getUserMedia) {
+      if (!navigator.mediaDevices?.getUserMedia)
         throw new Error("المتصفح لا يدعم getUserMedia.");
-      }
 
-      // طلب تيار الكاميرا
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
       streamRef.current = stream;
@@ -144,11 +129,8 @@ export default function ExerciseCoach() {
       const video = videoRef.current!;
       const canvas = canvasRef.current!;
       video.srcObject = stream;
-
-      // بعض المتصفحات ترفض play بلا تفاعل؛ نحن بالفعل داخل onClick
       try { await video.play(); } catch {}
 
-      // تزامن القياسات
       const syncCanvas = () => {
         if (!video.videoWidth || !video.videoHeight) return;
         canvas.width = video.videoWidth;
@@ -162,7 +144,7 @@ export default function ExerciseCoach() {
       loop();
     } catch (e: any) {
       setCameraError(explainGetUserMediaError(e));
-      stopCamera(); // تنظيف لو فشل
+      stopCamera();
     }
   }
 
@@ -176,7 +158,6 @@ export default function ExerciseCoach() {
     setRunning(false);
   }
 
-  // حلقة المعالجة
   function loop() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -199,16 +180,9 @@ export default function ExerciseCoach() {
 
     if (result.landmarks.length) {
       const landmarks = result.landmarks[0];
-
-      // رسم نقاط
       const drawer = new DrawingUtils(ctx);
-      drawer.drawLandmarks(landmarks, {
-        radius: 4,
-        visibilityMin: 0.65,
-        fillColor: "#18A4B8",
-      });
+      drawer.drawLandmarks(landmarks, { radius: 4, visibilityMin: 0.65, fillColor: "#18A4B8" });
 
-      // حساب الزوايا والعد
       const leg = pickLeg(landmarks);
       const hip = landmarks[leg.hip];
       const knee = landmarks[leg.knee];
@@ -248,7 +222,6 @@ export default function ExerciseCoach() {
     rafRef.current = requestAnimationFrame(loop);
   }
 
-  // تنظيف عند الخروج من الصفحة
   useEffect(() => {
     return () => {
       stopCamera();
@@ -258,19 +231,15 @@ export default function ExerciseCoach() {
 
   return (
     <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/20 bg-black shadow">
-      {/* زر التشغيل يظهر إذا النماذج جاهزة والكاميرا غير شغّالة */}
       {!running && (
         <button
           onClick={startCamera}
           disabled={!isReady}
-          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow
-                     disabled:opacity-50 bg-blue-600 hover:bg-blue-700"
-          title={isReady ? "تشغيل الكاميرا" : "جاري تجهيز النماذج..."}
+          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow disabled:opacity-50 bg-blue-600 hover:bg-blue-700"
         >
           تشغيل الكاميرا 🎥
         </button>
       )}
-
       {running && (
         <button
           onClick={stopCamera}
@@ -280,11 +249,9 @@ export default function ExerciseCoach() {
         </button>
       )}
 
-      {/* الفيديو مخفي — نرسم على الكانفس */}
       <video ref={videoRef} className="hidden" playsInline muted />
       <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-      {/* عداد وزوايا */}
       <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-10">
         <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
           <span className="font-semibold text-lg">{repCount}</span>
@@ -300,7 +267,6 @@ export default function ExerciseCoach() {
         </div>
       </div>
 
-      {/* رسائل الحالة */}
       {(!isReady || cameraError) && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
           <p className="text-sm leading-relaxed" dir="rtl">
