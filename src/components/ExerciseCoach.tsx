@@ -337,7 +337,7 @@ export default function ExerciseCoach() {
   return (
     <div className="grid gap-6 md:grid-cols-[minmax(720px,1fr)_320px]">
       {/* الكاميرا */}
-      <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/15 bg-black shadow-lg">
+      <div className="relative w-full max-w-[420px] aspect-[4/3] rounded-3xl overflow-hidden border border-white/20 bg-black shadow">
         {/* أزرار */}
         {/* ... نفس أزرار التشغيل/الإيقاف كما هي ... */}
         <button
