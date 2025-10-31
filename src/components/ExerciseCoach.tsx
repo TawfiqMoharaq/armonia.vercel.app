@@ -9,7 +9,6 @@ import {
 
 /* ---------------------------------- Config --------------------------------- */
 
-// وصلات الهيكل (BlazePose 33 نقطة)
 const POSE_CONNECTIONS: Array<[number, number]> = [
   [0,1],[1,2],[2,3],[3,7],
   [0,4],[4,5],[5,6],[6,8],
@@ -25,22 +24,22 @@ const POSE_CONNECTIONS: Array<[number, number]> = [
 const MODEL_CANDIDATES = ["/models/pose_landmarker_lite.task"];
 const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
 
-// ضبط المرآة (كاميرا أمامية)
+// المرآة
 const MIRROR = true;
 
-// حدود العدّ (سكوات)
+// حدود السكوات
 const KNEE_UP_THRESHOLD = 160;
 const KNEE_DOWN_MIN = 70;
 const KNEE_DOWN_MAX = 100;
 const BACK_SAFE_THRESHOLD = 150;
 
-// فلترة وتتبع
-const V_TORSO_MIN = 0.55;           // حد أدنى لمتوسط وضوح الجذع (كتفين + وركين)
-const V_LEG_MIN = 0.60;             // حد أدنى لوضوح نقاط الرجل المختارة
-const REQUIRED_KEYPOINTS = [11,12,23,24,27,28]; // كتفين + وركين + كاحلين
-const MIN_PRESENT_RATIO = 0.75;      // يجب توفر 75% من النقاط المطلوبة
-const EMA_ALPHA = 0.35;             // تتبع ناعم للعلامات (0..1)
-const BOTTOM_DWELL_FRAMES = 4;      // لازم يبقى بالقاع عدة فريمات لمنع العدّ الوهمي
+// فلترة/جودة
+const V_TORSO_MIN = 0.55;
+const V_LEG_MIN = 0.60;
+const REQUIRED_KEYPOINTS = [11,12,23,24,27,28];
+const MIN_PRESENT_RATIO = 0.75;
+const EMA_ALPHA = 0.35;
+const BOTTOM_DWELL_FRAMES = 4;
 
 /* ----------------------------- Helpers & Types ------------------------------ */
 
@@ -82,7 +81,6 @@ function explainGetUserMediaError(err: any): string {
   }
 }
 
-// تتبّع ناعم (EMA) لمجموعة landmarks
 function smoothLandmarks(
   prev: NormalizedLandmark[] | null,
   next: NormalizedLandmark[],
@@ -91,7 +89,6 @@ function smoothLandmarks(
   if (!prev || prev.length !== next.length) return next.map(p => ({...p}));
   return next.map((p, i) => {
     const q = prev[i];
-    // ادمج فقط إذا كلاهما لهما visibility معقولة لتفادي السحب من لا شيء
     const a = (p.visibility ?? 0) > 0.2 && (q.visibility ?? 0) > 0.2 ? alpha : 1.0;
     return {
       x: a * p.x + (1 - a) * q.x,
@@ -102,23 +99,18 @@ function smoothLandmarks(
   });
 }
 
-// تحقّق جودة التتبّع لمنع العدّ الوهمي
 function isPoseQualityGood(lms: NormalizedLandmark[]): boolean {
-  // 1) توفّر نقاط أساسية
   const present = REQUIRED_KEYPOINTS.filter(i => (lms[i]?.visibility ?? 0) > 0.2).length;
   if (present / REQUIRED_KEYPOINTS.length < MIN_PRESENT_RATIO) return false;
 
-  // 2) وضوح الجذع (كتفين + وركين)
   const torsoIdx = [11,12,23,24];
   const torsoV = torsoIdx.reduce((s,i)=>s+(lms[i]?.visibility ?? 0),0)/torsoIdx.length;
   if (torsoV < V_TORSO_MIN) return false;
 
-  // 3) وضوح الرجل المختارة
   const leg = pickLeg(lms);
   const vLeg = [leg.hip, leg.knee, leg.ankle].reduce((s,i)=>s+(lms[i]?.visibility ?? 0),0)/3;
   if (vLeg < V_LEG_MIN) return false;
 
-  // 4) ترتيب منطقي: الكاحل أسفل الركبة، الركبة أسفل/بمحاذاة الورك
   const hipY = lms[leg.hip].y, kneeY = lms[leg.knee].y, ankleY = lms[leg.ankle].y;
   if (!(ankleY > kneeY && kneeY >= hipY - 0.1)) return false;
 
@@ -134,13 +126,9 @@ export default function ExerciseCoach() {
   const rafRef = useRef<number>();
   const streamRef = useRef<MediaStream | null>(null);
 
-  // smoothing buffer
   const smoothRef = useRef<NormalizedLandmark[] | null>(null);
-
-  // state for counting
   const phaseRef = useRef<"UP" | "GOING_DOWN" | "BOTTOM_HOLD" | "GOING_UP">("UP");
   const bottomHoldFramesRef = useRef(0);
-
   const lastSampleRef = useRef<AngleSample>({ knee: -1, back: -1 });
 
   const [isReady, setIsReady] = useState(false);
@@ -152,7 +140,9 @@ export default function ExerciseCoach() {
   const [backAngle, setBackAngle] = useState<number | null>(null);
   const [backWarning, setBackWarning] = useState(false);
 
-  // تهيئة WASM + الموديل
+  // لوحة النصائح (يمكن إخفاؤها/إظهارها)
+  const [showTips, setShowTips] = useState(true);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -237,7 +227,6 @@ export default function ExerciseCoach() {
     setRunning(false);
   }
 
-  // منطق العدّ الاحترافي مع المرآة + فلترة/تنعيم
   function loop() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -256,7 +245,6 @@ export default function ExerciseCoach() {
     const now = performance.now();
     const detection = landmarker.detectForVideo(video, now);
 
-    // امسح
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
@@ -265,20 +253,15 @@ export default function ExerciseCoach() {
       ctx.scale(-1, 1);
     }
 
-    // ارسم الفيديو
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // ارسم الهيكل + احسب الزوايا والعدّ
     if (detection.landmarks.length) {
-      // ناعم
       const raw = detection.landmarks[0];
       const smooth = smoothLandmarks(smoothRef.current, raw, EMA_ALPHA);
       smoothRef.current = smooth;
 
-      // جودة التتبّع (تمنع العدّ عند وجود وجه فقط أو ضوضاء)
       const qualityOK = isPoseQualityGood(smooth);
 
-      // رسم الهيكل لو الجودة جيدة (أو دائماً لو تبغى)
       ctx.lineWidth = 3;
       ctx.strokeStyle = "white";
       ctx.fillStyle = "white";
@@ -287,13 +270,8 @@ export default function ExerciseCoach() {
 
       const drawer = new DrawingUtils(ctx);
       drawer.drawConnectors(smooth, POSE_CONNECTIONS);
-      drawer.drawLandmarks(smooth, {
-        radius: 4,
-        visibilityMin: 0.65,
-        fillColor: "white",
-      });
+      drawer.drawLandmarks(smooth, { radius: 4, visibilityMin: 0.65, fillColor: "white" });
 
-      // حساب الزوايا والعدّ (فقط عند جودة جيدة)
       if (qualityOK) {
         const leg = pickLeg(smooth);
         const hip = smooth[leg.hip];
@@ -306,16 +284,13 @@ export default function ExerciseCoach() {
         if (hip && knee && ankle) k = vectorAngle(hip, knee, ankle);
         if (shoulder && hip && knee) b = vectorAngle(shoulder, hip, knee);
 
-        // تحديث الـ UI للزوايا
         if (k != null) {
           const r = clampInt(k);
           if (r != null) {
             if (Math.abs((lastSampleRef.current.knee) - r) >= 1) setKneeAngle(r);
             lastSampleRef.current.knee = r;
           }
-        } else {
-          setKneeAngle(null);
-        }
+        } else setKneeAngle(null);
 
         if (b != null) {
           const r = clampInt(b);
@@ -329,57 +304,45 @@ export default function ExerciseCoach() {
           setBackWarning(false);
         }
 
-        // --------- State Machine للسكوات ----------
+        // State machine
         if (k != null) {
           const angle = k;
-
           switch (phaseRef.current) {
-            case "UP": {
-              // نازل للأسفل
+            case "UP":
               if (angle <= KNEE_DOWN_MAX) {
                 phaseRef.current = "GOING_DOWN";
                 bottomHoldFramesRef.current = 0;
               }
               break;
-            }
-            case "GOING_DOWN": {
-              // وصل إلى القاع (ضمن النطاق) => ابدأ العدّ التثبيتي
+            case "GOING_DOWN":
               if (angle >= KNEE_DOWN_MIN && angle <= KNEE_DOWN_MAX) {
                 bottomHoldFramesRef.current++;
                 if (bottomHoldFramesRef.current >= BOTTOM_DWELL_FRAMES) {
                   phaseRef.current = "BOTTOM_HOLD";
                 }
               } else if (angle > KNEE_DOWN_MAX + 10) {
-                // خرج فجأة قبل التثبيت
                 phaseRef.current = "UP";
                 bottomHoldFramesRef.current = 0;
               }
               break;
-            }
-            case "BOTTOM_HOLD": {
-              // يبدأ يطلع
+            case "BOTTOM_HOLD":
               if (angle >= KNEE_DOWN_MAX + 15) {
                 phaseRef.current = "GOING_UP";
               }
               break;
-            }
-            case "GOING_UP": {
-              // تم الصعود الكامل
+            case "GOING_UP":
               if (angle >= KNEE_UP_THRESHOLD) {
                 setRepCount((c) => c + 1);
                 phaseRef.current = "UP";
                 bottomHoldFramesRef.current = 0;
               }
               break;
-            }
           }
         } else {
-          // فقدنا الركبة — أعد الضبط
           phaseRef.current = "UP";
           bottomHoldFramesRef.current = 0;
         }
       } else {
-        // الجودة غير كافية: لا عدّ ولا زوايا
         setKneeAngle(null);
         setBackAngle(null);
         setBackWarning(false);
@@ -422,6 +385,7 @@ export default function ExerciseCoach() {
       <video ref={videoRef} className="hidden" playsInline muted />
       <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
+      {/* عدّاد وزوايا */}
       <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-10">
         <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
           <span className="font-semibold text-lg">{repCount}</span>
@@ -437,11 +401,34 @@ export default function ExerciseCoach() {
         </div>
       </div>
 
-      {(!isReady || cameraError) && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
-          <p className="text-sm leading-relaxed" dir="rtl">
-            {cameraError ?? "جاري تجهيز MediaPipe (WASM + Model)...\nبعد اكتمال التحميل اضغط تشغيل الكاميرا."}
-          </p>
+      {/* لوحة نصائح بجانب الكاميرا */}
+      <div className="absolute left-4 bottom-4 z-10">
+        <button
+          onClick={() => setShowTips(s => !s)}
+          className="md:hidden mb-2 px-3 py-1 rounded-xl text-white bg-black/60 backdrop-blur"
+        >
+          {showTips ? "إخفاء النصائح" : "إظهار النصائح"}
+        </button>
+
+        {showTips && (
+          <div className="max-w-[340px] md:max-w-[360px] px-4 py-3 rounded-2xl text-white bg-black/55 backdrop-blur shadow">
+            <div className="font-semibold mb-2">نصائح سريعة:</div>
+            <ul className="list-disc ps-5 space-y-1 text-sm leading-6">
+              <li>إضاءة أمامية جيدة، وخلفية بسيطة بدون فوضى.</li>
+              <li>ضع الكاميرا على مستوى الصدر أو الخصر، وبمسافة تُظهر الجسم كاملاً.</li>
+              <li>قف في منتصف الإطار واترك مسافة كافية للأطراف.</li>
+              <li>ارتدِ ملابس متباينة اللون عن الخلفية لزيادة التتبّع.</li>
+              <li>انزل ببطء واثبت في القاع ثانية ثم اطلع بهدوء.</li>
+              <li>توقف إذا شعرت بألم، واحفظ استقامة الظهر دائماً.</li>
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* لا نعرض شاشة التحميل إطلاقاً — نعرض الخطأ فقط */}
+      {cameraError && (
+        <div className="absolute inset-x-0 bottom-0 m-4 px-4 py-3 rounded-xl bg-red-600/90 text-white text-sm z-10">
+          {cameraError}
         </div>
       )}
 
