@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 import { sendChat } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 
+/* ----------------------------- Types & Options ----------------------------- */
+
 interface SurveyState {
   sound: string;
   touch: string;
@@ -40,10 +42,12 @@ const INITIAL_STATE: SurveyState = {
   activities: "",
 };
 
+/* ------------------------------ Helper Utils ------------------------------ */
+
 const stripBoldMarkers = (text: string) => text.replace(/\*\*(.+?)\*\*/g, "$1").trim();
 
 const toYoutubeSearchLink = (keywords?: string) => {
-  const base = keywords?.trim() || "family sensory routine tips";
+  const base = (keywords?.trim() && keywords.trim()) || "family sensory routine tips";
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(base)}`;
 };
 
@@ -60,7 +64,6 @@ const normalizeYoutubeLink = (url: string, fallbackKeywords?: string) => {
   ) {
     return toYoutubeSearchLink(fallbackKeywords);
   }
-
   return url;
 };
 
@@ -89,9 +92,7 @@ const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
       lastIndex = offset + match.length;
       return match;
     });
-    if (lastIndex < segment.length) {
-      nodes.push(segment.slice(lastIndex));
-    }
+    if (lastIndex < segment.length) nodes.push(segment.slice(lastIndex));
   };
 
   while (remaining.length) {
@@ -114,9 +115,7 @@ const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
       current.match.index < prev.match.index ? current : prev,
     );
 
-    if (earliest.match.index > 0) {
-      pushPlain(remaining.slice(0, earliest.match.index));
-    }
+    if (earliest.match.index > 0) pushPlain(remaining.slice(0, earliest.match.index));
 
     const [full, first, second] = earliest.match;
 
@@ -159,6 +158,8 @@ const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
 
   return nodes.filter((node) => !(typeof node === "string" && node.length === 0));
 };
+
+/* ------------------------------ Component ------------------------------ */
 
 const FamilyGuide = () => {
   const navigate = useNavigate();
@@ -260,6 +261,33 @@ const FamilyGuide = () => {
     [responses.light, responses.sound, responses.touch],
   );
 
+  /* ----------------------- Smarter analysis rendering ---------------------- */
+
+  const isSectionTitle = (txt: string) => {
+    const clean = stripBoldMarkers(txt).replace(/[•\-\s]+/g, "").trim();
+    // يلتقط "صباحًا" أو "مساءً" أو "المواقف" أو "إذا ..."
+    return (
+      /^صباح/.test(clean) ||
+      /^مساء/.test(clean) ||
+      /^فيالمواقف/.test(clean) ||
+      /^إذ/.test(clean)
+    );
+  };
+
+  const sectionIcon = (title: string) => {
+    if (/^صباح/.test(title)) return "🚀";
+    if (/^مساء/.test(title)) return "🌙";
+    if (/^في/.test(title) || /^إذ/.test(title)) return "😣";
+    return "✨";
+    };
+
+  const sectionColor = (title: string) => {
+    if (/^صباح/.test(title)) return "text-blue-600";
+    if (/^مساء/.test(title)) return "text-purple-600";
+    if (/^في/.test(title) || /^إذ/.test(title)) return "text-orange-600";
+    return "text-[#0A6D8B]";
+  };
+
   const renderAnalysis = () => {
     const lines = analysis
       .split(/\n+/)
@@ -304,15 +332,30 @@ const FamilyGuide = () => {
     };
 
     lines.forEach((line) => {
+      // نقاط
       if (/^[•\-]/.test(line)) {
         bulletBuffer.push(line);
         return;
       }
 
-      flushBullets();
+      // إذا واجهنا عنوان قسم، نفرّغ النقاط قبله ونطبعه كعنوان
+      if (isSectionTitle(line)) {
+        flushBullets();
+        const title = stripBoldMarkers(line).replace(/[:：]+$/, "").trim();
+        const color = sectionColor(title);
+        const icon = sectionIcon(title);
+        blocks.push(
+          <h3 key={`hdr-${blocks.length}`} className={`text-lg md:text-xl font-semibold ${color} mt-2`}>
+            {icon} {title}
+          </h3>,
+        );
+        return;
+      }
 
+      // سطر عادي: "عنوان: نص"
       const colonIndex = line.indexOf(":");
       if (colonIndex > 0) {
+        flushBullets();
         const heading = stripBoldMarkers(line.slice(0, colonIndex).trim());
         const body = stripBoldMarkers(line.slice(colonIndex + 1).trim());
         const blockKey = `block-${blocks.length}`;
@@ -322,14 +365,14 @@ const FamilyGuide = () => {
               {heading}
               {body ? ":" : ""}
             </span>
-            {body ? (
-              <span className="mr-1">{renderInline(body, responses.activities)}</span>
-            ) : null}
+            {body ? <span className="mr-1">{renderInline(body, responses.activities)}</span> : null}
           </p>,
         );
         return;
       }
 
+      // سطر نصي حر
+      flushBullets();
       const blockKey = `block-${blocks.length}`;
       blocks.push(
         <p key={blockKey} className="text-[#4A5568] text-sm md:text-base leading-relaxed">
@@ -342,152 +385,167 @@ const FamilyGuide = () => {
     return blocks;
   };
 
+  /* --------------------------------- Render -------------------------------- */
+
   return (
-    <div
-      className="min-h-screen bg-gradient-to-b from-[#F0F8FA] to-[#FFFFFF] text-gray-800 flex flex-col items-center py-12"
-      dir="rtl"
-    >
-
-    <header className="absolute top-0 left-0 right-0 flex justify-between items-center px-12 py-6">
-      {/* زر الرئيسية على اليمين */}
-        <button
-          onClick={() => navigate("/")}
-          className="text-lg font-semibold text-[#0A6D8B] hover:text-[#18A4B8] transition ml-auto"
-        >
-          الرئيسية
-        </button>
-
-        {/* شعار Armonia على اليسار */}
-        <button
-          onClick={() => navigate("/")}
-          className="text-2xl font-bold text-[#0A6D8B] hover:text-[#18A4B8] transition mr-auto"
-        >
-          Armonia
-        </button>
-      </header>
-
-      <h1 className="text-3xl font-bold text-[#0A6D8B] mb-6">دليل الأسرة الذكي</h1>
-
-      {!showResult ? (
-        <div className="bg-white shadow-lg rounded-xl p-8 w-full max-w-lg space-y-6">
-          <p className="text-lg text-[#4A5568] text-center mb-4">
-            عبّوا البيانات التالية عشان يجهز المساعد توصيات تناسب الروتين اليومي لأسرتكم:
-          </p>
-
-          <label className="block text-sm font-medium text-[#2D3748]">
-            كيف يتفاعل مع الأصوات؟
-            <select
-              name="sound"
-              value={responses.sound}
-              onChange={handleChange}
-              className="mt-2 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B] bg-white"
-            >
-              <option value="">اختر الخيار الأنسب</option>
-              {SOUND_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block text-sm font-medium text-[#2D3748]">
-            هل يحب اللمس أم يتجنبه؟
-            <select
-              name="touch"
-              value={responses.touch}
-              onChange={handleChange}
-              className="mt-2 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B] bg-white"
-            >
-              <option value="">اختر الخيار الأنسب</option>
-              {TOUCH_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block text-sm font-medium text-[#2D3748]">
-            هل يتضايق من الضوء أو الألوان؟
-            <select
-              name="light"
-              value={responses.light}
-              onChange={handleChange}
-              className="mt-2 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B] bg-white"
-            >
-              <option value="">اختر الخيار الأنسب</option>
-              {LIGHT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <textarea
-            name="activities"
-            value={responses.activities}
-            onChange={handleChange}
-            placeholder="ما الأنشطة التي يفضلها؟ اذكر ألعاب أو حركات يحبها."
-            className="w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B]"
-            rows={3}
-          />
-
-          {error && (
-            <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C]">
-              {error}
-            </div>
-          )}
-
+    <div className="min-h-screen bg-slate-50 text-gray-800" dir="rtl">
+      {/* Header ثابت */}
+      <header className="sticky top-0 z-20 bg-white/80 backdrop-blur border-b border-slate-200">
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+          {/* زر الرئيسية على اليمين */}
           <button
-            onClick={handleAnalyze}
-            disabled={!hasInput || loading}
-            className="bg-gradient-to-r from-[#0A6D8B] to-[#18A4B8] text-white px-8 py-3 rounded-lg hover:opacity-90 w-full font-semibold disabled:opacity-50"
+            onClick={() => navigate("/")}
+            className="text-lg font-semibold text-[#0A6D8B] hover:text-[#18A4B8] transition"
           >
-            {loading ? "قاعدين نجهز التوصيات..." : "طلّع التوصيات"}
+            الرئيسية
+          </button>
+          {/* شعار على اليسار */}
+          <button
+            onClick={() => navigate("/")}
+            className="text-2xl font-bold text-[#0A6D8B] hover:text-[#18A4B8] transition"
+          >
+            Armonia
           </button>
         </div>
-      ) : (
-        <div className="bg-white shadow-lg rounded-xl p-8 w-full max-w-lg space-y-6">
-          <h2 className="text-2xl font-semibold text-[#0A6D8B] text-center">
-            توصيات سريعة لعائلتكم
-          </h2>
+      </header>
 
-          {error && (
-            <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C] text-center">
-              {error}
+      <main className="max-w-3xl mx-auto px-4 py-10">
+        <h1 className="text-3xl font-bold text-[#0A6D8B] mb-6 text-center">دليل الأسرة الذكي</h1>
+
+        {!showResult ? (
+          <div className="bg-white shadow-md rounded-2xl p-6 sm:p-8 space-y-6">
+            <p className="text-base text-[#4A5568] text-center">
+              عبّوا البيانات التالية عشان يجهز المساعد توصيات تناسب الروتين اليومي لأسرتكم:
+            </p>
+
+            {/* Inputs */}
+            <label className="block text-sm font-medium text-[#2D3748]">
+              كيف يتفاعل مع الأصوات؟
+              <select
+                name="sound"
+                value={responses.sound}
+                onChange={handleChange}
+                className="mt-2 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B] bg-white"
+              >
+                <option value="">اختر الخيار الأنسب</option>
+                {SOUND_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-sm font-medium text-[#2D3748]">
+              هل يحب اللمس أم يتجنبه؟
+              <select
+                name="touch"
+                value={responses.touch}
+                onChange={handleChange}
+                className="mt-2 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B] bg-white"
+              >
+                <option value="">اختر الخيار الأنسب</option>
+                {TOUCH_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-sm font-medium text-[#2D3748]">
+              هل يتضايق من الضوء أو الألوان؟
+              <select
+                name="light"
+                value={responses.light}
+                onChange={handleChange}
+                className="mt-2 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B] bg-white"
+              >
+                <option value="">اختر الخيار الأنسب</option>
+                {LIGHT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <textarea
+              name="activities"
+              value={responses.activities}
+              onChange={handleChange}
+              placeholder="ما الأنشطة التي يفضلها؟ اذكر ألعاب أو حركات يحبها."
+              className="w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B]"
+              rows={3}
+            />
+
+            {error && (
+              <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C]">
+                {error}
+              </div>
+            )}
+
+            <button
+              onClick={handleAnalyze}
+              disabled={!hasInput || loading}
+              className="bg-gradient-to-r from-[#0A6D8B] to-[#18A4B8] text-white px-8 py-3 rounded-lg hover:opacity-90 w-full font-semibold disabled:opacity-50"
+            >
+              {loading ? "قاعدين نجهز التوصيات..." : "طلّع التوصيات"}
+            </button>
+          </div>
+        ) : (
+          <div className="bg-white shadow-md rounded-2xl p-6 sm:p-8 space-y-6">
+            <h2 className="text-2xl font-semibold text-[#0A6D8B] text-center">
+              توصيات سريعة لعائلتكم
+            </h2>
+
+            {error && (
+              <div className="rounded-lg border border-[#F87171] bg-[#FEE2E2] px-4 py-3 text-sm text-[#B91C1C] text-center">
+                {error}
+              </div>
+            )}
+
+            <div className="bg-[#F7FAFC] border border-[#E2E8F0] rounded-lg p-5 space-y-2 text-right text-sm md:text-base leading-loose">
+              {loading ? (
+                <p className="animate-pulse text-slate-500">جارٍ ترتيب التوصيات…</p>
+              ) : (
+                renderAnalysis()
+              )}
             </div>
-          )}
 
-          <div className="bg-[#F7FAFC] border border-[#E2E8F0] rounded-lg p-5 space-y-2 text-right text-sm md:text-base">
-            {renderAnalysis()}
+            <div className="flex flex-col sm:flex-row justify-center gap-4">
+              <button
+                onClick={handleMoreTips}
+                disabled={loading}
+                className="bg-[#0A6D8B] text-white px-6 py-2 rounded-lg hover:bg-[#085A73] disabled:opacity-50"
+              >
+                {loading ? "نحدّث الأفكار..." : "نبي أفكار زيادة"}
+              </button>
+              <a
+                href={toYoutubeSearchLink(responses.activities || "موسيقى مريحة")}
+                target="_blank"
+                rel="noreferrer"
+                className="px-6 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7] text-center"
+              >
+                🎧 موسيقى مريحة
+              </a>
+              <button
+                onClick={handleReset}
+                className="bg-white border border-slate-300 text-slate-700 px-6 py-2 rounded-lg hover:bg-slate-50"
+              >
+                تعديل البيانات
+              </button>
+            </div>
           </div>
+        )}
 
-          <div className="flex flex-col sm:flex-row justify-center gap-4">
-            <button
-              onClick={handleMoreTips}
-              disabled={loading}
-              className="bg-[#0A6D8B] text-white px-6 py-2 rounded-lg hover:bg-[#085A73] disabled:opacity-50"
-            >
-              {loading ? "نحدّث الأفكار..." : "نبي أفكار زيادة"}
-            </button>
-            <button
-              onClick={handleReset}
-              className="bg-white border border-[#0A6D8B] text-[#0A6D8B] px-6 py-2 rounded-lg hover:bg-[#E6F4F7]"
-            >
-              تعديل البيانات
-            </button>
-          </div>
-        </div>
-      )}
-
-      <footer className="mt-10 text-sm text-[#4A5568]">
-        لأي استفسار تواصلوا معنا على{" "}
-        <a href="mailto:ai.armonia.sa@gmail.com" className="text-[#0A6D8B] font-medium">
-          ai.armonia.sa@gmail.com
-        </a>
-      </footer>
+        <footer className="mt-10 text-sm text-[#4A5568] text-center">
+          لأي استفسار تواصلوا معنا على{" "}
+          <a href="mailto:ai.armonia.sa@gmail.com" className="text-[#0A6D8B] font-medium">
+            ai.armonia.sa@gmail.com
+          </a>
+        </footer>
+      </main>
     </div>
   );
 };
