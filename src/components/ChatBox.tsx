@@ -2,7 +2,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import ExerciseCard from "./ExerciseCard";
-import { findExerciseByName, type Exercise } from "../data/exercises";
+import { findExerciseByName } from "../data/exercises";
+import type { Exercise } from "../data/exercises";
+
+/* ======================= ربط payload بقاعدة التمارين ======================= */
+function pickExerciseFromPayload(payload: any): Exercise | null {
+  const name = payload?.exercise;
+  if (!name) return null;
+  return findExerciseByName(String(name));
+}
 
 /* ======================= تنظيف واستخراج ======================= */
 const stripCodeFences = (t: string) =>
@@ -27,7 +35,11 @@ const cleanModelText = (t: string) => {
 
 const tryParseJson = (s: unknown): any | null => {
   if (typeof s !== "string") return null;
-  try { return JSON.parse(s); } catch { return null; }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 };
 
 const regexExtractUiText = (s: string): string | null => {
@@ -118,11 +130,10 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // ✅ لوحة التمرين أسفل الشات
+  // ✅ لوحة التمرين/التصحيح أسفل الشات
   const [currentExercise, setCurrentExercise] = useState<Exercise | null>(null);
 
   useEffect(() => {
-    // مفيد للتأكد من صحة الـ API في الإنتاج
     console.log("VITE_API_BASE =", API_BASE);
   }, []);
 
@@ -158,6 +169,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
 
       if (!res.ok) {
         const errText = await res.text().catch(() => "");
+        console.error("Chat API HTTP error:", res.status, errText);
         throw new Error(`HTTP ${res.status} ${errText}`);
       }
 
@@ -183,17 +195,13 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         role: "assistant",
         text: ui,
         pretty,
-        raw:
-          typeof data === "object"
-            ? { ...(data as any), payload: payload ?? (data as any).payload }
-            : undefined,
+        raw: typeof data === "object" ? { ...(data as any), payload: (payload ?? (data as any).payload) } : undefined,
       };
       setMessages((m) => [...m, botMsg]);
 
-      // ✅ حدّث صندوق التمرين تحت الشات (إذا رجع اسم تمرين)
-      const name = (botMsg.raw as any)?.payload?.exercise;
-      const ex = name ? findExerciseByName(String(name)) : null;
-      setCurrentExercise(ex || null);
+      // ✅ حدّث لوحة التمرين أسفل الشات
+      const ex = pickExerciseFromPayload((botMsg.raw as any)?.payload);
+      if (ex) setCurrentExercise(ex);
     } catch (err) {
       console.error(err);
       const fallback =
@@ -225,7 +233,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   useEffect(() => {
     if (!autoSentRef.current && muscles && muscles.length > 0) {
       autoSentRef.current = true;
-      sendMessage("شعور بسيط بالألم — خلّنا نبدأ بخطة آمنة 💪");
+      sendMessage("شعور بسيط بالألم — خلنا نبدأ بخطة آمنة 💪");
     }
   }, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -238,111 +246,78 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   };
 
   return (
-    <div className="w-full flex flex-col gap-4">
-      {/* 🔷 صندوق الشات */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="h-[380px] overflow-y-auto rounded-xl bg-slate-50 p-3 space-y-3">
-          {messages.length === 0 ? (
-            <div className="text-slate-500 text-center py-10">
-              حدّد مكان الألم أو اكتب سؤالك، وبنرد عليك بإرشادات مرتبة. ✨
-            </div>
-          ) : (
-            messages.map((m) => (
+    <div className="w-full h-full flex flex-col gap-3">
+      {/* الرسائل */}
+      <div className="flex-1 overflow-y-auto rounded-2xl bg-slate-50 p-3 space-y-3">
+        {messages.length === 0 ? (
+          <div className="text-slate-500 text-center py-10">
+            حدّد مكان الألم أو اكتب سؤالك، وبنرد عليك بإرشادات مرتبة. ✨
+          </div>
+        ) : (
+          messages.map((m) => (
+            <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               <div
-                key={m.id}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                className={[
+                  "max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm",
+                  m.role === "user" ? "bg-blue-50" : "bg-white/70",
+                ].join(" ")}
               >
-                <div
-                  className={[
-                    "max-w-[90%] rounded-2xl px-4 py-3 leading-7 shadow-sm",
-                    m.role === "user" ? "bg-blue-50" : "bg-white",
-                  ].join(" ")}
-                >
-                  <ReactMarkdown
-                    components={{
-                      code: ({ inline, children, ...props }) =>
-                        inline ? (
-                          <code className="px-1 py-0.5 rounded bg-black/5" {...props}>
-                            {children}
-                          </code>
-                        ) : null,
-                      h3: ({ children }) => (
-                        <h3 className="text-lg font-semibold mt-1 mb-1">{children}</h3>
-                      ),
-                      h4: ({ children }) => (
-                        <h4 className="text-base font-semibold mt-1 mb-1">{children}</h4>
-                      ),
-                      ul: ({ children }) => (
-                        <ul className="list-disc ms-6 space-y-1">{children}</ul>
-                      ),
-                      ol: ({ children }) => (
-                        <ol className="list-decimal ms-6 space-y-1">{children}</ol>
-                      ),
-                      li: ({ children }) => <li className="leading-7">{children}</li>,
-                      p: ({ children }) => <p className="my-1">{children}</p>,
-                      strong: ({ children }) => (
-                        <strong className="font-semibold">{children}</strong>
-                      ),
-                      em: ({ children }) => <em className="opacity-90">{children}</em>,
-                      a: ({ children, href }) => (
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="underline"
-                        >
+                <ReactMarkdown
+                  components={{
+                    code: ({ inline, children, ...props }) =>
+                      inline ? (
+                        <code className="px-1 py-0.5 rounded bg-black/5" {...props}>
                           {children}
-                        </a>
-                      ),
-                    }}
-                  >
-                    {m.pretty}
-                  </ReactMarkdown>
-                </div>
+                        </code>
+                      ) : null,
+                    h3: ({ children }) => <h3 className="text-lg font-semibold mt-1 mb-1">{children}</h3>,
+                    h4: ({ children }) => <h4 className="text-base font-semibold mt-1 mb-1">{children}</h4>,
+                    ul: ({ children }) => <ul className="list-disc ms-6 space-y-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal ms-6 space-y-1">{children}</ol>,
+                    li: ({ children }) => <li className="leading-7">{children}</li>,
+                    p: ({ children }) => <p className="my-1">{children}</p>,
+                    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                    em: ({ children }) => <em className="opacity-90">{children}</em>,
+                    a: ({ children, href }) => (
+                      <a href={href} target="_blank" rel="noreferrer" className="underline">
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {m.pretty}
+                </ReactMarkdown>
               </div>
-            ))
-          )}
-          {busy && (
-            <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>
-          )}
-        </div>
-
-        {/* الإدخال */}
-        <div className="mt-3 flex items-end gap-2">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="اكتب هنا… (Enter للإرسال)"
-            className="flex-1 min-h-[48px] max-h-40 resize-y rounded-2xl border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-          />
-          <button
-            onClick={send}
-            disabled={busy || !input.trim()}
-            className="shrink-0 rounded-2xl px-4 h-12 bg-blue-600 text-white font-medium shadow hover:bg-blue-700 disabled:opacity-50"
-          >
-            إرسال
-          </button>
-        </div>
+            </div>
+          ))
+        )}
+        {busy && <div className="text-slate-500 text-sm text-center py-2">يكتب…</div>}
       </div>
 
-      {/* 🟩 صندوق التمرين تحت الشات */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">🎯 التمرين المقترح</h3>
-          {/* زر تصفية/إخفاء لو حبيت مستقبلاً */}
+      {/* ✅ لوحة التمرين/التصحيح أسفل الشات */}
+      {currentExercise && (
+        <div className="mt-2">
+          <ExerciseCard exercise={currentExercise} />
         </div>
+      )}
 
-        {!currentExercise ? (
-          <p className="text-slate-500 mt-2">
-            سيظهر هنا التمرين عندما يقترحه المدرب (سكوات/بلانك/…).
-          </p>
-        ) : (
-          <div className="mt-2">
-            <ExerciseCard exercise={currentExercise} />
-          </div>
-        )}
+      {/* الإدخال */}
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="اكتب هنا… (Enter للإرسال)"
+          className="flex-1 min-h-[48px] max-h-40 resize-y rounded-2xl border border-slate-300 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+        />
+        <button
+          onClick={send}
+          disabled={busy || !input.trim()}
+          className="shrink-0 rounded-2xl px-4 h-12 bg-blue-600 text-white font-medium shadow hover:bg-blue-700 disabled:opacity-50"
+        >
+          إرسال
+        </button>
       </div>
     </div>
   );
