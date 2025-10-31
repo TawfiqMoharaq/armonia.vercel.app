@@ -3,18 +3,34 @@ import * as React from "react";
 
 type Props = {
   side: "front" | "back";
-  imgSrc: string;               // مسار صورة الجسم المطابقة لـ BODY_MAP
+  imgSrc: string;                 // مسار صورة الجسم المطابقة لـ BODY_MAP
   onResults?: (data: any) => void; // تستقبل ناتج الـ API
-  apiUrl?: string;              // افتراضي /api/analyze
+  apiUrl?: string;                // افتراضي /api/analyze
+  /** لو تبغى ترجع آخر اختيار تلقائيًا (افتراضي = false) */
+  persistSelection?: boolean;
 };
 
 type Circle = { cx: number; cy: number; r: number };
 
-export default function CirclePicker({ side, imgSrc, onResults, apiUrl = "/api/analyze" }: Props) {
+export default function CirclePicker({
+  side,
+  imgSrc,
+  onResults,
+  apiUrl = "/api/analyze",
+  persistSelection = false,
+}: Props) {
   const imgRef = React.useRef<HTMLImageElement | null>(null);
   const overlayRef = React.useRef<HTMLDivElement | null>(null);
   const [circle, setCircle] = React.useState<Circle | null>(null);
   const [dragMode, setDragMode] = React.useState<null | "move" | "resize">(null);
+
+  // ————————————————— ضبط البداية بدون أي اختيار —————————————————
+  // نضمن عدم وجود اختيار تلقائي عند أول تحميل أو عند تغيير الصورة/الجهة
+  React.useEffect(() => {
+    if (!persistSelection) {
+      setCircle(null);
+    }
+  }, [side, imgSrc, persistSelection]);
 
   const getOverlayRect = () => overlayRef.current?.getBoundingClientRect();
 
@@ -22,13 +38,12 @@ export default function CirclePicker({ side, imgSrc, onResults, apiUrl = "/api/a
     const rect = getOverlayRect();
     if (!rect) return { x: 0, y: 0 };
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    // ملاحظة: جعلنا الـ overlay يطابق أبعاد الصورة بالـ CSS
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
     const { x, y } = toLocal(e);
     if (!circle) {
-      // أول نقرة: دائرة ابتدائية
+      // أول نقرة: ابدأ دائرة ابتدائية فقط إذا ضغط المستخدم
       const rect = getOverlayRect()!;
       const r0 = Math.min(rect.width, rect.height) * 0.08;
       setCircle({ cx: x, cy: y, r: Math.max(6, r0) });
@@ -55,7 +70,9 @@ export default function CirclePicker({ side, imgSrc, onResults, apiUrl = "/api/a
 
     if (dragMode === "resize") {
       const r = Math.hypot(x - circle.cx, y - circle.cy);
-      setCircle((c) => (c ? { ...c, r: Math.max(6, Math.min(r, Math.min(rect.width, rect.height) * 0.5)) } : c));
+      setCircle((c) =>
+        c ? { ...c, r: Math.max(6, Math.min(r, Math.min(rect.width, rect.height) * 0.5)) } : c
+      );
     } else if (dragMode === "move") {
       // قيّد الدائرة داخل الـ overlay قدر الإمكان
       const r = circle.r;
@@ -68,9 +85,7 @@ export default function CirclePicker({ side, imgSrc, onResults, apiUrl = "/api/a
   const handleMouseUp = () => setDragMode(null);
 
   const confirmPick = async () => {
-    if (!circle || !imgRef.current || !overlayRef.current) return;
-
-    // نطبّع باستخدام أبعاد overlay (المفروض مساوية للصورة تمامًا)
+    if (!circle || !overlayRef.current) return;
     const rect = overlayRef.current.getBoundingClientRect();
     const renderW = rect.width, renderH = rect.height;
     const cx_norm = circle.cx / renderW;
@@ -100,12 +115,14 @@ export default function CirclePicker({ side, imgSrc, onResults, apiUrl = "/api/a
           src={imgSrc}
           alt={side}
           className="select-none pointer-events-none block"
-          style={{ width: "400px", height: "600px", objectFit: "cover" }} // 2:3 مثل خريطة الباك
+          style={{ width: "400px", height: "600px", objectFit: "cover" }} // 2:3
         />
+
         {/* طبقة الدائرة (overlay) تطابق أبعاد الصورة */}
         <div
           ref={overlayRef}
-          className="absolute inset-0 cursor-crosshair"
+          className="absolute inset-0"
+          style={{ cursor: circle ? "move" : "crosshair" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -126,12 +143,23 @@ export default function CirclePicker({ side, imgSrc, onResults, apiUrl = "/api/a
               </>
             )}
           </svg>
+
+          {/* تلميح صغير عند عدم وجود اختيار */}
+          {!circle && (
+            <div className="absolute left-1/2 top-5 -translate-x-1/2 rounded-md bg-black/60 px-3 py-1 text-sm text-white">
+              اضغط على المكان المصاب لرسم دائرة التحديد
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="mt-2 flex gap-8">
-        <button onClick={confirmPick}>تأكيد التحديد</button>
-        <button onClick={() => setCircle(null)}>مسح</button>
+      <div className="mt-2 flex items-center gap-8">
+        <button onClick={confirmPick} disabled={!circle} className={`px-3 py-1 rounded ${circle ? "bg-blue-600 text-white" : "bg-gray-300 text-gray-600 cursor-not-allowed"}`}>
+          تأكيد التحديد
+        </button>
+        <button onClick={() => setCircle(null)} className="px-3 py-1 rounded bg-gray-100">
+          مسح
+        </button>
       </div>
     </div>
   );
