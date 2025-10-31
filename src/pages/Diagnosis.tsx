@@ -17,7 +17,7 @@ import {
 interface CircleSelection {
   cx: number;
   cy: number;
-  radius: number;
+  radius: number; // [0..1] كنسبة من أقصر بُعد للصورة
 }
 
 const HEADLINE = "حدّد موضع الإزعاج بدقّة";
@@ -28,10 +28,10 @@ const ERROR_MESSAGE =
   "تعذّر تحديد العضلة بدقّة، جرّب مرة أخرى أو صغّر الدائرة.";
 const RADIUS_LABEL = "قطر الدائرة (% من الصورة):";
 const RADIUS_HINT =
-  "اضغط على الصورة لتغيير مركز الدائرة. إن كانت النتائج غير دقيقة، حرّك الدائرة أو صغّر نصف القطر لإعادة التحليل.";
+  "اضغط على الصورة لتحديد المركز، ثم استخدم شريط التمرير لتكبير/تصغير نصف القطر. إن كانت النتائج غير دقيقة، حرّك الدائرة أو صغّر نصف القطر لإعادة التحليل.";
 const LOADING_LABEL = "يتم التحليل";
 const EMPTY_HINT =
-  "حرّك الدائرة لتحديد موضع أوضح، ثم ستظهر العضلات المحتملة هنا.";
+  "اضغط على الصورة لاختيار الموضع، ثم عدّل نصف القطر إن لزم — ستظهر هنا العضلات المحتملة.";
 
 const SIDE_LABELS: Record<BodySideKey, string> = {
   front: "الجزء الأمامي",
@@ -53,20 +53,25 @@ const INTENSITY_LEVELS = [
   { value: "intense", label: "قوي" },
 ] as const;
 
-const DEFAULT_CIRCLE: CircleSelection = {
-  cx: 0.5,
-  cy: 0.45,
-  radius: 0.07,
-};
+// 👇 بدل الدائرة الافتراضية: سنبدأ "بدون أي دائرة/تحليل"
+const INITIAL_RADIUS = 0.07; // قيمة أولية تُستخدم عند أول نقرة
 
 export default function Diagnosis() {
   const [side, setSide] = useState<BodySideKey>("front");
-  const [circle, setCircle] = useState<CircleSelection>(DEFAULT_CIRCLE);
+
+  // ✅ لا نضع دائرة عند البداية: null
+  const [circle, setCircle] = useState<CircleSelection | null>(null);
+  const [radius, setRadius] = useState(INITIAL_RADIUS); // نخزن نصف القطر بشكل منفصل لعرض السلايدر قبل رسم الدائرة
+
   const [results, setResults] = useState<MuscleContext[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [painLevel, setPainLevel] = useState<(typeof PAIN_LEVELS)[number]["value"]>("moderate");
   const [intensityLevel, setIntensityLevel] = useState<(typeof INTENSITY_LEVELS)[number]["value"]>("moderate");
+
+  // 🧠 التفاعل البشري: لا تحليل إلا بعده
+  const [userInteracted, setUserInteracted] = useState(false);
 
   const computeFallbackResults = (sideKey: BodySideKey, selection: CircleSelection): MuscleContext[] => {
     const mapData = BODY_MAPS[sideKey];
@@ -90,7 +95,10 @@ export default function Diagnosis() {
     }));
   };
 
+  // 🔒 ما نحلل إلا إذا: فيه دائرة && فيه تفاعل مستخدم
   useEffect(() => {
+    if (!userInteracted || !circle) return;
+
     const selection = { cx: circle.cx, cy: circle.cy, radius: circle.radius };
     let cancelled = false;
 
@@ -100,7 +108,7 @@ export default function Diagnosis() {
       try {
         const response = await analyzeSelection({ side, circle: selection });
         if (!cancelled) {
-          if (response.results.length) {
+          if (response.results?.length) {
             setResults(response.results);
           } else {
             const fallback = computeFallbackResults(side, selection);
@@ -128,7 +136,7 @@ export default function Diagnosis() {
     return () => {
       cancelled = true;
     };
-  }, [side, circle.cx, circle.cy, circle.radius]);
+  }, [userInteracted, side, circle?.cx, circle?.cy, circle?.radius]);
 
   const map = BODY_MAPS[side];
 
@@ -136,24 +144,30 @@ export default function Diagnosis() {
     const rect = event.currentTarget.getBoundingClientRect();
     const cx = (event.clientX - rect.left) / rect.width;
     const cy = (event.clientY - rect.top) / rect.height;
-    setCircle((prev) => ({
-      ...prev,
+    setCircle({
       cx: Math.min(Math.max(cx, 0), 1),
       cy: Math.min(Math.max(cy, 0), 1),
-    }));
+      radius, // نستخدم القيمة الحالية للسلايدر
+    });
+    setUserInteracted(true);
   };
 
   const handleRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const next = Number(event.target.value) / 100;
-    setCircle((prev) => ({ ...prev, radius: next }));
+    setRadius(next);
+    // لو فيه دائرة مرسومة، نحدث نصف قطرها ونعتبره تفاعلًا
+    setCircle((prev) => (prev ? { ...prev, radius: next } : prev));
+    if (circle) setUserInteracted(true);
   };
 
-  const circleStyle = {
-    width: `${Math.min(circle.radius * 2, 1) * 100}%`,
-    height: `${Math.min(circle.radius * 2, 1) * 100}%`,
-    left: `${Math.max(circle.cx - circle.radius, 0) * 100}%`,
-    top: `${Math.max(circle.cy - circle.radius, 0) * 100}%`,
-  };
+  const circleStyle = circle
+    ? {
+        width: `${Math.min(circle.radius * 2, 1) * 100}%`,
+        height: `${Math.min(circle.radius * 2, 1) * 100}%`,
+        left: `${Math.max(circle.cx - circle.radius, 0) * 100}%`,
+        top: `${Math.max(circle.cy - circle.radius, 0) * 100}%`,
+      }
+    : undefined;
 
   const rankedResults = useMemo(() => results.slice(0, 2), [results]);
 
@@ -200,13 +214,25 @@ export default function Diagnosis() {
     if (!recommended) setRecommended(defaultExercise);
   }, [defaultExercise, recommended]);
 
+  // عند تغيير الجهة: صفّر كل شيء
+  const switchSide = (option: BodySideKey) => {
+    setSide(option);
+    setCircle(null);
+    setRadius(INITIAL_RADIUS);
+    setResults([]);
+    setError(null);
+    setLoading(false);
+    setUserInteracted(false);
+    setRecommended(null);
+  };
+
   return (
     <div className="bg-[#F7FAFC] min-h-screen flex flex-col justify-between">
       <Navbar />
 
       <section className="max-w-5xl mx-auto p-6 space-y-8" dir="rtl">
         <header className="text-center space-y-3">
-          <h1 className="text-زxl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
+          <h1 className="text-2xl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
           <p className="text-gray-600 text-sm md:text-base">{INTRO_TEXT}</p>
         </header>
 
@@ -214,7 +240,7 @@ export default function Diagnosis() {
           {(Object.keys(SIDE_LABELS) as BodySideKey[]).map((option) => (
             <button
               key={option}
-              onClick={() => setSide(option)}
+              onClick={() => switchSide(option)}
               className={`px-5 py-2 rounded-full border font-medium transition ${
                 side === option ? "bg-[#0A6D8B] text-white" : "bg-white text-gray-700"
               }`}
@@ -236,29 +262,47 @@ export default function Diagnosis() {
                   alt={SIDE_LABELS[side]}
                   className="absolute inset-0 h-full w-full object-contain select-none pointer-events-none"
                 />
-                <div className="absolute inset-0 cursor-crosshair" onClick={handleBodyClick} role="presentation">
-                  <div
-                    className="absolute rounded-full border-2 border-dashed border-[#0A6D8B]/80 bg-[#0A6D8B]/10 transition-all"
-                    style={circleStyle}
-                  />
-                  {resultWithMeta.map(({ data, meta }, index) => {
-                    if (!meta) return null;
-                    const [x1, y1, x2, y2] = meta.box_norm;
-                    const centerX = ((x1 + x2) / 2) * 100;
-                    const centerY = ((y1 + y2) / 2) * 100;
-                    const diameter = Math.max(x2 - x1, y2 - y1) * 100 * 0.9;
-                    const size = Math.max(diameter, 4);
-                    const left = Math.min(Math.max(centerX - size / 2, 0), 100 - size);
-                    const top = Math.min(Math.max(centerY - size / 2, 0), 100 - size);
-                    const badgeCls = BADGE_CLASSES[index] ?? "border-[#14B8A6]";
-                    return (
-                      <div
-                        key={data.muscle_en}
-                        className={`absolute border-2 ${badgeCls} rounded-full pointer-events-none bg-[#0A6D8B]/10`}
-                        style={{ left: `${left}%`, top: `${top}%`, width: `${size}%`, height: `${size}%` }}
-                      />
-                    );
-                  })}
+
+                <div
+                  className="absolute inset-0 cursor-crosshair"
+                  onClick={handleBodyClick}
+                  role="presentation"
+                >
+                  {/* الدائرة تظهر فقط بعد أول نقرة */}
+                  {circle && (
+                    <div
+                      className="absolute rounded-full border-2 border-dashed border-[#0A6D8B]/80 bg-[#0A6D8B]/10 transition-all"
+                      style={circleStyle}
+                    />
+                  )}
+
+                  {/* إبراز العضلات الأعلى فقط بعد التحليل */}
+                  {circle &&
+                    resultWithMeta.map(({ data, meta }, index) => {
+                      if (!meta) return null;
+                      const [x1, y1, x2, y2] = meta.box_norm;
+                      const centerX = ((x1 + x2) / 2) * 100;
+                      const centerY = ((y1 + y2) / 2) * 100;
+                      const diameter = Math.max(x2 - x1, y2 - y1) * 100 * 0.9;
+                      const size = Math.max(diameter, 4);
+                      const left = Math.min(Math.max(centerX - size / 2, 0), 100 - size);
+                      const top = Math.min(Math.max(centerY - size / 2, 0), 100 - size);
+                      const badgeCls = BADGE_CLASSES[index] ?? "border-[#14B8A6]";
+                      return (
+                        <div
+                          key={data.muscle_en}
+                          className={`absolute border-2 ${badgeCls} rounded-full pointer-events-none bg-[#0A6D8B]/10`}
+                          style={{ left: `${left}%`, top: `${top}%`, width: `${size}%`, height: `${size}%` }}
+                        />
+                      );
+                    })}
+
+                  {/* تلميح عند عدم وجود دائرة */}
+                  {!circle && (
+                    <div className="absolute left-1/2 top-3 -translate-x-1/2 rounded-md bg-black/60 px-3 py-1 text-xs text-white">
+                      اضغط على الموضع المصاب لبدء التحديد
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -271,12 +315,13 @@ export default function Diagnosis() {
                   type="range"
                   min={2}
                   max={16}
-                  value={Math.round(circle.radius * 100)}
+                  value={Math.round((circle?.radius ?? radius) * 100)}
                   onChange={handleRadiusChange}
                   className="flex-1"
+                  disabled={!circle} // 🔒 لا يتحكم قبل رسم الدائرة
                 />
                 <span className="font-medium text-[#0A6D8B] text-sm w-12 text-left">
-                  {Math.round(circle.radius * 100)}%
+                  {Math.round((circle?.radius ?? radius) * 100)}%
                 </span>
               </div>
               <p className="text-xs text-gray-500 leading-relaxed">{RADIUS_HINT}</p>
@@ -377,10 +422,9 @@ export default function Diagnosis() {
         <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-4">
           <ChatBox
             musclesContext={rankedResults}
-            autoStartAdvice
+            autoStartAdvice={false}                 // 🔒 لا يبدأ تلقائيًا
             autoStartPrompt={autoStartPrompt}
             sessionKey={`${painLevel}-${intensityLevel}`}
-            // ✅ إذا ذكر الشات تمرينًا بالاسم (سكوات/ثايز...) نعرضه فورًا
             onSuggestedExercise={(name) => {
               const hit = findExerciseByName(name) || defaultExercise || null;
               setRecommended(hit);
@@ -393,9 +437,9 @@ export default function Diagnosis() {
               <h3 className="text-base md:text-lg font-semibold text-[#0A6D8B]">
                 تمرين مقترح بناءً على اختيارك:
               </h3>
-              <ExerciseCard exercise={recommended} />
             </>
           )}
+          {recommended && <ExerciseCard exercise={recommended} />}
         </div>
       </section>
 
