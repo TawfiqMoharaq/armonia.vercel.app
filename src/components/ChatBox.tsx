@@ -1,7 +1,7 @@
 // src/components/ChatBox.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import ExerciseCard from "./ExerciseCard";
+import ChatReply from "./ChatReply"; // ✅ عرض ردود المساعد بتنسيق موحّد
 import { findExerciseByName, type Exercise } from "../data/exercises";
 
 /* ======================= تنظيف واستخراج ======================= */
@@ -169,7 +169,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
       }
 
       if (typeof data === "object" && data && !sessionId) {
-        setSessionId(data.session_id);
+        setSessionId((data as ChatResponse).session_id);
       }
 
       const { ui, payload } = extractUiAndPayload(data);
@@ -237,6 +237,19 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
     }
   };
 
+  /* ====== كلمات مفتاحية ذكية لروابط البحث (يوتيوب) ====== */
+  const pickFallbackKeywords = (m: Message): string | undefined => {
+    const p = m.raw?.payload as any;
+    return (
+      p?.exercise ||
+      p?.muscle ||
+      p?.keywords ||
+      muscles?.[0]?.muscle_ar ||
+      muscles?.[0]?.muscle_en ||
+      "تمارين منزلية آمنة"
+    );
+  };
+
   return (
     <div className="w-full flex flex-col gap-4">
       {/* 🔷 صندوق الشات */}
@@ -258,46 +271,15 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
                     m.role === "user" ? "bg-blue-50" : "bg-white",
                   ].join(" ")}
                 >
-                  <ReactMarkdown
-                    components={{
-                      code: ({ inline, children, ...props }) =>
-                        inline ? (
-                          <code className="px-1 py-0.5 rounded bg-black/5" {...props}>
-                            {children}
-                          </code>
-                        ) : null,
-                      h3: ({ children }) => (
-                        <h3 className="text-lg font-semibold mt-1 mb-1">{children}</h3>
-                      ),
-                      h4: ({ children }) => (
-                        <h4 className="text-base font-semibold mt-1 mb-1">{children}</h4>
-                      ),
-                      ul: ({ children }) => (
-                        <ul className="list-disc ms-6 space-y-1">{children}</ul>
-                      ),
-                      ol: ({ children }) => (
-                        <ol className="list-decimal ms-6 space-y-1">{children}</ol>
-                      ),
-                      li: ({ children }) => <li className="leading-7">{children}</li>,
-                      p: ({ children }) => <p className="my-1">{children}</p>,
-                      strong: ({ children }) => (
-                        <strong className="font-semibold">{children}</strong>
-                      ),
-                      em: ({ children }) => <em className="opacity-90">{children}</em>,
-                      a: ({ children, href }) => (
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="underline"
-                        >
-                          {children}
-                        </a>
-                      ),
-                    }}
-                  >
-                    {m.pretty}
-                  </ReactMarkdown>
+                  {m.role === "assistant" ? (
+                    // ✅ عرض موحّد لردود المساعد مع ذكاء في ترتيب العناوين/النقاط/الروابط
+                    <ChatReply text={m.pretty} fallbackKeywords={pickFallbackKeywords(m)} />
+                  ) : (
+                    // رسالة المستخدم كنص بسيط RTL
+                    <div dir="rtl" className="text-slate-800">
+                      {m.pretty}
+                    </div>
+                  )}
                 </div>
               </div>
             ))
