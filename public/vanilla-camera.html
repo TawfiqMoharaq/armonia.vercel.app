@@ -1,14 +1,12 @@
-<!-- أضف زر تشغيل فوق الكاميرا -->
 <button id="startBtn">تشغيل الكاميرا</button>
 
 <script type="module">
-  import {
-    DrawingUtils,
-    FilesetResolver,
-    PoseLandmarker,
-  } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22";
-
-  // ... (ثابتات MODEL_CANDIDATES و WASM_BASE و thresholds كما هي)
+  const MODEL_CANDIDATES = [
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/latest/pose_landmarker_lite.task",
+    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float32/latest/pose_landmarker_full.task",
+  ];
+  const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
 
   const video   = document.getElementById("video");
   const canvas  = document.getElementById("canvas");
@@ -19,13 +17,9 @@
   const baEl    = document.getElementById("ba");
   const startBtn= document.getElementById("startBtn");
 
-  // ✅ خَلِّ الفيديو ظاهر مؤقتاً للتأكد (احذف hidden من الHTML أو خلي السطر هذا)
-  video.classList.remove("hidden");   // <-- مهم للـdebug
-  video.autoplay = true; video.muted = true; video.playsInline = true;
-
   let landmarker = null, raf = 0, wasDown = false, reps = 0;
 
-  function showError(msg){ errBox.style.display="flex"; errBox.textContent = msg; }
+  function showError(msg){ errBox.style.display="flex"; errBox.textContent = String(msg); }
   function hideError(){ errBox.style.display="none"; }
 
   async function getStream(){
@@ -33,23 +27,45 @@
       { video:{ facingMode:"user", width:{ideal:960}, height:{ideal:720} }, audio:false },
       { video:true, audio:false },
     ];
-    for (const c of trials) {
-      try { return await navigator.mediaDevices.getUserMedia(c); }
-      catch(e){ /* جرّب التالي */ }
-    }
-    throw new Error("تعذر تشغيل الكاميرا. تأكد من الإذن وHTTPS وعدم انشغال الكاميرا.");
+    let last;
+    for (const c of trials) { try { return await navigator.mediaDevices.getUserMedia(c); } catch(e){ last=e; } }
+    throw last || new Error("تعذر تشغيل الكاميرا.");
   }
 
-  async function init(){
-    try{
-      if (!navigator.mediaDevices?.getUserMedia)
-        throw new Error("المتصفح لا يدعم getUserMedia.");
-      if (!window.isSecureContext)
-        throw new Error("الصفحة ليست HTTPS. استخدم https أو localhost.");
+  function loop(){
+    if (video.readyState < 2) { raf = requestAnimationFrame(loop); return; }
 
-      const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm");
+    const now = performance.now();
+    const out = landmarker.detectForVideo(video, now);
 
-      // حمّل الموديل (GPU→CPU، lite→full)
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    if (out.landmarks.length){
+      const lms = out.landmarks[0];
+      ctx.fillStyle="#18A4B8";
+      for(const p of lms) if ((p.visibility??0) > 0.65)
+        ctx.fillRect(p.x*canvas.width-2, p.y*canvas.height-2, 4,4);
+
+      // حساب بسيط للزوايا/العد ممكن تضيفه هنا (تركته مختصرًا الآن)
+    }
+    raf = requestAnimationFrame(loop);
+  }
+
+  startBtn.addEventListener("click", async () => {
+    startBtn.disabled = true;
+
+    try {
+      // ✅ الاستيراد هنا — لو فشل بنعرض رسالة واضحة
+      const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22");
+      const { FilesetResolver, PoseLandmarker } = vision;
+
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("المتصفح لا يدعم getUserMedia.");
+      if (!window.isSecureContext) throw new Error("الصفحة ليست HTTPS.");
+
+      const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+
+      // جرّب GPU→CPU وكل النماذج
       let lastErr=null;
       for (const delegate of ["GPU","CPU"]) {
         for (const url of MODEL_CANDIDATES) {
@@ -60,75 +76,35 @@
               numPoses: 1,
               delegate
             });
-            console.log("[loaded]", delegate, url);
             lastErr=null; break;
-          } catch(e){ lastErr=e; console.warn("load fail", delegate, url, e); }
+          } catch(e){ lastErr=e; }
         }
         if (!lastErr) break;
       }
-      if (!landmarker) throw lastErr || new Error("فشل تحميل نموذج التتبّع.");
+      if (!landmarker) throw lastErr || new Error("تعذر تحميل نموذج التتبّع.");
 
       const stream = await getStream();
       video.srcObject = stream;
-
-      // ✅ انتظر إشارة الجاهزية ثم اضبط المقاس وابدأ
+      video.muted = true; video.playsInline = true; // iOS
       await video.play().catch(()=>{});
-      await new Promise(res=>{
+      await new Promise(res => {
         if (video.readyState >= 2) return res();
         video.onloadeddata = () => res();
       });
 
-      // لو المقاسات صفر، سوّي محاولة مزامنة
-      const sync = ()=>{
-        if (video.videoWidth && video.videoHeight) {
-          canvas.width  = video.videoWidth;
-          canvas.height = video.videoHeight;
-        }
-      };
-      sync();
-      video.addEventListener("loadedmetadata", sync);
-      video.addEventListener("resize", sync);
+      // اضبط أبعاد الكانفس
+      if (video.videoWidth && video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
 
-      // ✅ لا تبدأ اللوب إلا إذا video جاهز
       hideError();
       loop();
-    }catch(e){
+    } catch (e) {
       console.error(e);
-      showError(e.message || "تعذر بدء تشغيل المدرب.");
+      showError(e?.message || e);
+      startBtn.disabled = false;
     }
-  }
-
-  function loop(){
-    if (video.readyState < 2) {        // <-- guard مهم
-      raf = requestAnimationFrame(loop);
-      return;
-    }
-
-    const now = performance.now();
-    const out = landmarker.detectForVideo(video, now);  // تتبع
-
-    // ✅ ارسم الفيديو أولاً (لو ما ظهر كانفاس أسود)
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    if (out.landmarks.length){
-      const lms = out.landmarks[0];
-
-      // نقاط بسيطة (اختياري)
-      ctx.fillStyle="#18A4B8";
-      for(const p of lms) if ((p.visibility??0) > 0.65)
-        ctx.fillRect(p.x*canvas.width-2, p.y*canvas.height-2, 4,4);
-
-      // ... حساب الزوايا والعدّ (كما في كودك السابق)
-    }
-
-    raf = requestAnimationFrame(loop);
-  }
-
-  // ✅ شغّل فقط عند ضغطة زر (يتفادى قيود autoplay ويعرض إذن)
-  startBtn.addEventListener("click", ()=>{
-    startBtn.disabled = true;
-    init();
   });
 
   // تنظيف
