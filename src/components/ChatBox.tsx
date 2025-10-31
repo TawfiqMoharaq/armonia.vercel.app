@@ -1,31 +1,25 @@
-// src/components/ChatCoach.tsx
+// src/components/ChatBox.tsx
 import React, { useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 /* ======================= أدوات تنظيف النص ======================= */
 // يحذف أي أسوار كود (بما فيها ```json ... ```)
 const stripCodeFences = (t: string) =>
-  t
+  (t ?? "")
     .replace(/```json[\s\S]*?```/gi, "")
     .replace(/```[\s\S]*?```/g, "");
 
 // يحاول إزالة كتل JSON غير المُسوّرة والأسطر الشبيهة بـ JSON
 const stripInlineJson = (t: string) => {
-  // كلمة json المتناثرة
-  let out = t.replace(/\bjson\b/gi, "");
-
-  // كتل بين {} متعددة الأسطر (غالبًا JSON)
-  out = out.replace(/\{[\s\S]{20,}\}/g, "");
-
-  // أسطر تشبه "key": value
-  out = out.replace(/^\s*"?[a-zA-Z0-9_]+"?\s*:\s*.+$/gm, "");
-
+  let out = t.replace(/\bjson\b/gi, "");          // إزالة كلمة json المتناثرة
+  out = out.replace(/\{[\s\S]{20,}\}/g, "");      // إزالة كتل { ... } الكبيرة
+  out = out.replace(/^\s*"?[a-zA-Z0-9_]+"?\s*:\s*.+$/gm, ""); // إزالة أسطر "key": value
   return out;
 };
 
 // تنظيف شامل: إزالة أسوار الكود + أي JSON طائش + ترتيب الأسطر
 const cleanModelText = (t: string) => {
-  const noFences = stripCodeFences(t ?? "");
+  const noFences = stripCodeFences(t);
   const noJson = stripInlineJson(noFences);
   return noJson.replace(/\n{3,}/g, "\n\n").trim();
 };
@@ -60,13 +54,9 @@ type ChatRequest = {
 };
 
 type ChatResponse = {
-  // الجديدة
-  ui_text?: string;
-  payload?: any;
-  // التوافق الخلفي
-  reply?: string;
-
-  // ثابتة
+  ui_text?: string;   // نص العرض الجميل
+  payload?: any;      // بيانات داخلية (لا تُعرض)
+  reply?: string;     // توافق خلفي (يساوي ui_text غالبًا)
   session_id: string;
   turns: number;
   usedOpenAI: boolean;
@@ -79,9 +69,9 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8080";
 type Message = {
   id: string;
   role: "user" | "assistant";
-  text: string; // نص خام قبل التنظيف (نحفظه مرجع)
-  pretty: string; // نص منسق بعد التنظيف
-  raw?: ChatResponse; // الاستجابة الخام (نخزن payload داخلياً)
+  text: string;   // النص الخام
+  pretty: string; // النص المنظّف/المنسّق للعرض
+  raw?: ChatResponse;
 };
 
 function ChatMessageView({ msg }: { msg: Message }) {
@@ -140,7 +130,7 @@ function ChatMessageView({ msg }: { msg: Message }) {
   );
 }
 
-const ChatCoach: React.FC = () => {
+const ChatBox: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -148,10 +138,7 @@ const ChatCoach: React.FC = () => {
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
   // سياق العضلات (لو عندك بيانات حقيقية مررها هنا)
-  const context = useMemo<ChatContext>(
-    () => ({ muscles: [] }),
-    []
-  );
+  const context = useMemo<ChatContext>(() => ({ muscles: [] }), []);
 
   const send = async () => {
     const text = input.trim();
@@ -182,12 +169,11 @@ const ChatCoach: React.FC = () => {
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
       const data: ChatResponse = await res.json();
 
-      // نخزن session_id
+      // نخزن session_id أول مرة
       if (!sessionId) setSessionId(data.session_id);
 
       // ننتقي نص العرض وننظفه
@@ -203,7 +189,7 @@ const ChatCoach: React.FC = () => {
       };
 
       setMessages((m) => [...m, botMsg]);
-    } catch (err: any) {
+    } catch (err) {
       const fallback =
         "تعذر الاتصال بالخدمة الآن. جرّب لاحقًا أو تحقق من اتصالك بالإنترنت.";
       setMessages((m) => [
@@ -218,7 +204,6 @@ const ChatCoach: React.FC = () => {
       console.error(err);
     } finally {
       setBusy(false);
-      // رجّع التركيز لحقل الإدخال
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
@@ -266,15 +251,8 @@ const ChatCoach: React.FC = () => {
           إرسال
         </button>
       </div>
-
-      {/* رابط يوتيوب مقترح (اختياري): آخر رد يحوي youtube */}
-      {/*
-      <div className="text-center text-sm text-slate-500">
-        تلميح: سنعرض هنا رابط اليوتيوب من الاستجابة إن رغبت.
-      </div>
-      */}
     </div>
   );
 };
 
-export default ChatCoach;
+export default ChatBox;
