@@ -27,24 +27,28 @@ SYSTEM_PROMPT = (
 
 app = FastAPI(title="Armonia Coaching API")
 
+# ===================== CORS (معدّل) =====================
+# ملاحظة: لا تستخدم "*" مع allow_credentials=True. نحدد الدومينات صراحة + Regex لبرفيوز Vercel.
+PROD_ORIGIN = (FRONTEND_ORIGIN or "").strip()  # مثال: "https://armonia-vercel-odr35q6yt-ts-projects-e714a5fa.vercel.app"
+VercelPreviewRegex = r"^https://([a-z0-9-]+\.)*vercel\.app$"
 
-def _parse_origins(origin_setting: str) -> List[str]:
-    if origin_setting.strip() == "*":
-        return ["*"]
-    return [origin.strip() for origin in origin_setting.split(",") if origin.strip()]
-
-
-# بدّل الكتلة الحالية بهذا السطرين:
-origin_regex = r"https://.*vercel\.app$|http://localhost:5173"
+_allowed_origins: List[str] = []
+if PROD_ORIGIN:
+    _allowed_origins.append(PROD_ORIGIN)
+# التطوير المحلي
+_allowed_origins += ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=origin_regex,  # ← استخدم regex بدل allow_origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_origin_regex=VercelPreviewRegex,
+    allow_credentials=True,  # فعّلها فقط إذا تحتاج كوكيز/اعتمادات. (مسموح هنا مع Origins محددة)
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
+    expose_headers=["Content-Type"],
+    max_age=86400,
 )
-
+# =================== نهاية CORS =========================
 
 
 class Muscle(BaseModel):
