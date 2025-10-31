@@ -1,144 +1,338 @@
-<script>
-let video = document.getElementById("video");
-let canvas = document.getElementById("canvas");
-let ctx = canvas.getContext("2d");
-let info = document.getElementById("info");
-let landmarker = null;
-let rafId = 0;
-let reps = 0;
-let wasDown = false;
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Armonia – كاميرا + GIF</title>
 
-const WASM_BASE = "https://unpkg.com/@mediapipe/tasks-vision@0.10.22/wasm";
-const KNEE_UP = 160, KNEE_DOWN_MIN = 70, KNEE_DOWN_MAX = 100;
-
-// 2D angle
-function angle(a, b, c) {
-  if (!a || !b || !c) return null;
-  const abx = a.x - b.x, aby = a.y - b.y;
-  const cbx = c.x - b.x, cby = c.y - b.y;
-  const dot = abx*cbx + aby*cby;
-  const mab = Math.hypot(abx, aby);
-  const mcb = Math.hypot(cbx, cby);
-  if (!mab || !mcb) return null;
-  const cos = Math.min(Math.max(dot / (mab*mcb), -1), 1);
-  return Math.acos(cos) * 180 / Math.PI;
-}
-
-function pickLeg(lms){
-  // indices من Mediapipe: L(11,23,25,27) R(12,24,26,28)
-  const L={shoulder:11,hip:23,knee:25,ankle:27}, R={shoulder:12,hip:24,knee:26,ankle:28};
-  const vis = i => lms[i]?.visibility ?? 0;
-  const score = side => (vis(side.hip) + vis(side.knee) + vis(side.ankle));
-  return score(L) >= score(R) ? L : R;
-}
-
-function syncCanvasSize(){
-  // لو بعد التشغيل تغيرت أبعاد الفيديو (بعض الأجهزة تفعلها) نزبط الكانفس
-  const w = video.videoWidth || 640;
-  const h = video.videoHeight || 480;
-  if (canvas.width !== w) canvas.width = w;
-  if (canvas.height !== h) canvas.height = h;
-}
-
-async function initModel(){
-  info.textContent = "جارٍ تحميل نموذج تتبّع الجسم…";
-  const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-  landmarker = await PoseLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath:
-      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
-    },
-    runningMode: "VIDEO",
-    numPoses: 1
-  });
-  info.textContent = "✅ تم تحميل النموذج — اضغط تشغيل الكاميرا";
-}
-
-async function startCamera(){
-  info.textContent = "طلب إذن الكاميرا…";
-  try{
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: {ideal: 1280}, height: {ideal: 720} },
-      audio: false
-    });
-    video.srcObject = stream;
-    video.onloadedmetadata = () => {
-      syncCanvasSize();
-      info.textContent = "الكاميرا تعمل — تم بالتتبّع! 📷";
-      video.play();
-      // اسمع أي تغيير أبعاد يحدث لاحقًا
-      video.addEventListener("resize", syncCanvasSize);
-      loop();
-    };
-  }catch(e){
-    info.textContent = "❌ رُفض إذن الكاميرا. اسمح من القفل بجوار الرابط ثم حدّث الصفحة.";
-  }
-}
-
-function drawLandmarks(lms){
-  // نقاط
-  ctx.fillStyle = "#18A4B8";
-  for (const p of lms){
-    if ((p.visibility ?? 0) > 0.55) {
-      ctx.beginPath();
-      ctx.arc(p.x * canvas.width, p.y * canvas.height, 4, 0, Math.PI*2);
-      ctx.fill();
+  <style>
+    :root {
+      --card-h: 460px;
+      --max-w: 1100px;
+      --gap: 16px;
+      --bg: #111;
+      --fg: #fff;
+      --accent: #0a84ff;
     }
-  }
-}
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      min-height: 100vh;
+      display: block;            /* مهم: لا نجعلها flex */
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: min(92vw, var(--max-w));
+      margin: 18px auto 0;
+      gap: 10px;
+    }
+    .btn {
+      appearance: none;
+      border: 0;
+      padding: 10px 16px;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #fff;
+      background: var(--accent);
+    }
+    .btn.secondary { background: #444; }
+    #info {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    #container {
+      width: min(92vw, var(--max-w));
+      margin: 12px auto 24px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;   /* GIF يسار | كاميرا يمين */
+      gap: var(--gap);
+    }
+    .card {
+      width: 100%;
+      height: var(--card-h);
+      background: #000;
+      border-radius: 20px;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 10px 30px rgb(0 0 0 / 0.25);
+    }
+    /* —— صورة الـGIF —— */
+    #demo {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      display: block;
+    }
+    /* —— الكاميرا —— */
+    #video {
+      display: none;              /* نخفي الفيديو ونرسمه على الكانفس */
+    }
+    #canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #000;
+    }
+    /* شارة صغيرة أعلى يمين الكانفس للقيَم */
+    .hud {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      display: flex;
+      gap: 8px;
+      padding: 6px 10px;
+      background: rgb(0 0 0 / 0.45);
+      border-radius: 10px;
+      font-size: 13px;
+      backdrop-filter: blur(4px);
+    }
+    .hud b { font-weight: 700; }
+    .warning {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 12px;
+      padding: 8px 14px;
+      border-radius: 14px;
+      background: rgba(220, 38, 38, .88);
+      color: #fff;
+      font-weight: 700;
+      box-shadow: 0 8px 20px rgba(0,0,0,.35);
+      display: none;
+    }
+    @media (max-width: 900px) {
+      #container { grid-template-columns: 1fr; }
+      .hud { right: 10px; }
+    }
+  </style>
+</head>
+<body>
 
-function loop(){
-  rafId = requestAnimationFrame(loop);
-  if (!landmarker || video.readyState < 2) return;
+  <header>
+    <div id="info">جاهز ✅ — شغّل الكاميرا للتتبّع</div>
+    <div>
+      <button id="btnStart" class="btn">تشغيل الكاميرا</button>
+      <button id="btnStop"  class="btn secondary" style="display:none;">إيقاف</button>
+    </div>
+  </header>
 
-  // 1) ارسم الفيديو أولًا (مع قلب أفقي لعرض Selfie)
-  syncCanvasSize();
-  ctx.save();
-  ctx.scale(-1, 1);                      // mirror
-  ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
-  ctx.restore();
+  <main id="container">
+    <!-- يسار: GIF -->
+    <div class="card">
+      <img id="demo" src="/gifs/squat.gif" alt="Bodyweight Squat GIF"
+           onerror="this.style.display='none'"/>
+    </div>
 
-  // 2) التتبّع
-  const now = performance.now();
-  const out = landmarker.detectForVideo(video, now);
+    <!-- يمين: الكاميرا على الكانفس -->
+    <div class="card">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
 
-  // 3) لو فيه نقاط، ارسمها واحسب الزوايا والعدّ
-  if (out.landmarks.length){
-    const lmsNorm = out.landmarks[0];
+      <div class="hud" id="hud" style="display:none;">
+        <span>Reps: <b id="reps">0</b></span>
+        <span>| Knee: <b id="knee">—</b>°</span>
+        <span>| Back: <b id="back">—</b>°</span>
+      </div>
+      <div class="warning" id="warn">حافظ على استقامة ظهرك!</div>
+    </div>
+  </main>
 
-    // نقاط lmsNorm.x/y هي normalized (0..1) — حوّلها لإحداثيات بكسلية عند الرسم
-    drawLandmarks(lmsNorm);
+  <!-- ✅ Vision bundle من unpkg (أفضل من jsDelivr في حال فشل التحميل الديناميكي) -->
+  <script src="https://unpkg.com/@mediapipe/tasks-vision@0.10.22/vision_bundle.js"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
-    const side = pickLeg(lmsNorm);
-    const hip = lmsNorm[side.hip], knee = lmsNorm[side.knee], ankle = lmsNorm[side.ankle];
+  <script>
+    // عناصر DOM
+    const infoEl  = document.getElementById('info');
+    const btnStart= document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const video   = document.getElementById('video');
+    const canvas  = document.getElementById('canvas');
+    const ctx     = canvas.getContext('2d');
+    const hud     = document.getElementById('hud');
+    const repsEl  = document.getElementById('reps');
+    const kneeEl  = document.getElementById('knee');
+    const backEl  = document.getElementById('back');
+    const warnEl  = document.getElementById('warn');
 
-    const kAng = angle(
-      {x: hip.x, y: hip.y},
-      {x: knee.x, y: knee.y},
-      {x: ankle.x, y: ankle.y}
-    );
+    // Mediapipe
+    let landmarker = null;
+    let rafId = 0;
 
-    // نصوص تشخيصية
-    ctx.fillStyle = "white";
-    ctx.font = "16px sans-serif";
-    ctx.fillText(`Knee: ${kAng ? Math.round(kAng) : "—"}°`, 16, 28);
-    ctx.fillText(`Reps: ${reps}`, 16, 50);
+    // عدّاد السكوات
+    let reps = 0, wasDown = false;
+    const KNEE_UP = 160, KNEE_DOWN_MIN = 70, KNEE_DOWN_MAX = 100, BACK_SAFE = 150;
 
-    // عدّ السكوات
-    if (kAng != null) {
-      if (kAng <= KNEE_DOWN_MAX) wasDown = true;
-      if (kAng >= KNEE_UP && wasDown) {
-        reps++;
-        wasDown = false;
+    function setInfo(t){ infoEl.textContent = t; }
+
+    // حساب زاوية 2D
+    function angle(a, b, c){
+      if (!a || !b || !c) return null;
+      const abx=a.x-b.x, aby=a.y-b.y, cbx=c.x-b.x, cby=c.y-b.y;
+      const dot = abx*cbx + aby*cby;
+      const mab = Math.hypot(abx, aby), mcb = Math.hypot(cbx, cby);
+      if (!mab || !mcb) return null;
+      const cos = Math.min(Math.max(dot / (mab*mcb), -1), 1);
+      return Math.acos(cos) * 180/Math.PI;
+    }
+
+    function pickLeg(lms){
+      // Mediapipe indices: L(11,23,25,27) R(12,24,26,28)
+      const L={shoulder:11, hip:23, knee:25, ankle:27};
+      const R={shoulder:12, hip:24, knee:26, ankle:28};
+      const vis = i => lms[i]?.visibility ?? 0;
+      const score = s => vis(s.hip) + vis(s.knee) + vis(s.ankle);
+      return score(L) >= score(R) ? L : R;
+    }
+
+    function syncCanvasSize(){
+      if (!video.videoWidth || !video.videoHeight) return;
+      if (canvas.width !== video.videoWidth)   canvas.width  = video.videoWidth;
+      if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+    }
+
+    function drawLoop(){
+      rafId = requestAnimationFrame(drawLoop);
+      if (!landmarker || video.readyState < 2) return;
+
+      syncCanvasSize();
+
+      // ارسم الفيديو أولًا (مرآة للـselfie)
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+      ctx.restore();
+
+      const now = performance.now();
+      const out = landmarker.detectForVideo(video, now);
+
+      if (out.landmarks.length){
+        hud.style.display = 'flex';
+
+        const lms = out.landmarks[0];       // normalized [0..1]
+        // ارسم نقاط واضحة
+        ctx.fillStyle = "#18A4B8";
+        for (const p of lms){
+          if ((p.visibility ?? 0) > 0.55){
+            ctx.beginPath();
+            ctx.arc(p.x*canvas.width, p.y*canvas.height, 4, 0, Math.PI*2);
+            ctx.fill();
+          }
+        }
+
+        // حساب زوايا الركبة والظهر على الساق/الجهة الأفضل
+        const side = pickLeg(lms);
+        const hip = lms[side.hip], knee = lms[side.knee], ankle = lms[side.ankle], shoulder = lms[side.shoulder];
+
+        const kneeAng = angle(hip, knee, ankle);
+        const backAng = angle(shoulder, hip, knee);
+
+        if (kneeAng != null){
+          kneeEl.textContent = Math.round(kneeAng);
+          // عدّ السكوات
+          if (kneeAng >= KNEE_DOWN_MIN && kneeAng <= KNEE_DOWN_MAX) wasDown = true;
+          if (kneeAng >= KNEE_UP && wasDown){
+            wasDown = false;
+            reps++;
+            repsEl.textContent = reps;
+          }
+        } else {
+          kneeEl.textContent = '—';
+        }
+
+        if (backAng != null){
+          backEl.textContent = Math.round(backAng);
+          const bad = backAng < BACK_SAFE;
+          warnEl.style.display = bad ? 'block' : 'none';
+        } else {
+          backEl.textContent = '—';
+          warnEl.style.display = 'none';
+        }
+      } else {
+        hud.style.display = 'none';
+        warnEl.style.display = 'none';
+        ctx.fillStyle = "#fff";
+        ctx.font = "14px sans-serif";
+        ctx.fillText("اقترب من الكاميرا ووفّر إضاءة أفضل.", 16, 28);
       }
     }
-  } else {
-    // لو ما تعرف على جسم، أعرض تلميح
-    ctx.fillStyle = "white";
-    ctx.font = "16px sans-serif";
-    ctx.fillText("اقترب من الكاميرا ووفّر إضاءة أفضل.", 16, 28);
-  }
-}
 
-document.getElementById("btnStart").addEventListener("click", startCamera);
-initModel();
-</script>
+    async function initModel(){
+      try{
+        setInfo("جارٍ تحميل نموذج Mediapipe…");
+        const fileset = await FilesetResolver.forVisionTasks(
+          "https://unpkg.com/@mediapipe/tasks-vision@0.10.22/wasm"
+        );
+        landmarker = await PoseLandmarker.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+          },
+          runningMode: "VIDEO",
+          numPoses: 1
+        });
+        setInfo("✅ النموذج جاهز — اضغط تشغيل الكاميرا");
+      }catch(e){
+        console.error(e);
+        setInfo("❌ فشل تحميل نموذج Mediapipe. تحقّق من الشبكة ثم حدّث الصفحة.");
+      }
+    }
+
+    async function startCamera(){
+      try{
+        setInfo("طلب إذن الكاميرا…");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: {ideal: 1280}, height: {ideal: 720} },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        video.addEventListener("resize", syncCanvasSize);
+        syncCanvasSize();
+
+        // إعادة الضبط
+        reps = 0; wasDown = false;
+        repsEl.textContent = '0'; kneeEl.textContent = '—'; backEl.textContent = '—';
+
+        drawLoop();
+        btnStart.style.display = 'none';
+        btnStop.style.display  = 'inline-block';
+        setInfo("📹 الكاميرا تعمل — تم بالتتبّع!");
+      }catch(e){
+        console.error(e);
+        setInfo("❌ تم رفض إذن الكاميرا أو تعذر فتحها. اسمح من القفل بجوار الرابط ثم حدّث.");
+      }
+    }
+
+    function stopCamera(){
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+      const ms = video.srcObject;
+      if (ms) {
+        ms.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+      }
+      hud.style.display = 'none';
+      warnEl.style.display = 'none';
+      btnStart.style.display = 'inline-block';
+      btnStop.style.display  = 'none';
+      setInfo("تم إيقاف الكاميرا. يمكنك تشغيلها مجددًا.");
+      // امسح الكانفس
+      ctx.clearRect(0,0,canvas.width, canvas.height);
+    }
+
+    btnStart.addEventListener('click', startCamera);
+    btnStop .addEventListener('click', stopCamera);
+
+    // ابدأ بتحميل النموذج مباشرة
+    initModel();
+  </script>
+</body>
+</html>
