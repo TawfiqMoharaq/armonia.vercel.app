@@ -6,13 +6,18 @@ type ExerciseCardProps = { exercise: Exercise };
 
 export default function ExerciseCard({ exercise }: ExerciseCardProps) {
   const [start, setStart] = useState(false);
-  const gifSrc = (exercise as any).gif || (exercise as any).demoGif || "/gifs/squat.gif";
+
+  // لا نضيف أي Fallback هنا — فقط القيمة الموجودة فعلاً في البيانات
+  const gifSrc: string | null =
+    ((exercise as any).gif as string | undefined) ??
+    ((exercise as any).demoGif as string | undefined) ??
+    null;
 
   if (start && exercise.coachType === "squat") {
     return (
       <ExerciseRunner
         title={exercise.name}
-        gif={gifSrc}
+        gif={gifSrc}               // ← يمرر null لو ما فيه
         onClose={() => setStart(false)}
       />
     );
@@ -21,22 +26,24 @@ export default function ExerciseCard({ exercise }: ExerciseCardProps) {
   return (
     <div className="p-4 border rounded-3xl shadow bg-white/5">
       <div className="flex gap-4">
-        <img
-          src={gifSrc}
-          alt={exercise.name || "demo"}
-          className="w-36 rounded-xl object-contain"
-          onError={(e) => {
-            const img = e.currentTarget as HTMLImageElement;
-            if (!img.src.endsWith("/gifs/squat.gif")) img.src = "/gifs/squat.gif";
-          }}
-        />
+        {/* صورة المعاينة تُعرض فقط إذا فيه GIF */}
+        {gifSrc && (
+          <img
+            src={gifSrc}
+            alt={exercise.name || "demo"}
+            className="w-36 rounded-xl object-contain"
+          />
+        )}
+
         <div className="flex-1">
           <h3 className="text-lg font-bold">{exercise.name}</h3>
+
           {Array.isArray(exercise.tips) && exercise.tips.length > 0 && (
             <ul className="list-disc ms-5 mt-2 text-sm">
-              {exercise.tips.map((tip, index) => <li key={index}>{tip}</li>)}
+              {exercise.tips.map((tip, i) => <li key={i}>{tip}</li>)}
             </ul>
           )}
+
           {exercise.coachType === "squat" && (
             <button
               onClick={() => setStart(true)}
