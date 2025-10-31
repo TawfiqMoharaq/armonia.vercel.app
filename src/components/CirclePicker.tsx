@@ -1,5 +1,3 @@
-
-أنت قلت:
 // CirclePicker.tsx
 import * as React from "react";
 
