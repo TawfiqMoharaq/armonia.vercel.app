@@ -7,24 +7,24 @@ import {
   type NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
 
-// ===== مسارات =====
+// ===== مسارات (عدّلها لو مجلداتك مختلفة) =====
 const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
-// استخدم نسخة FULL لالتقاط أوضح (يمكن تبديلها إلى lite إذا أردت السرعة):
-const MODEL_PATH     = "/models/pose_landmarker_full.task";
+// لو ما عندك full بدّل للسطر التالي: "/models/pose_landmarker_lite.task"
+const MODEL_PATH = "/models/pose_landmarker_full.task";
 
 // ===== ثوابت =====
-const MIN_VISIBILITY       = 0.30;
-const MIN_LEG_SPAN_RATIO   = 0.28;
+const MIN_VISIBILITY = 0.3;
+const MIN_LEG_SPAN_RATIO = 0.28;
 const CENTRAL_ROI_MARGIN_X = 0.08;
 
-const KNEE_UP_THRESHOLD   = 155;
+const KNEE_UP_THRESHOLD = 155;
 const KNEE_DOWN_ENTER_MAX = 110;
-const KNEE_DOWN_EXIT_MIN  = 130;
+const KNEE_DOWN_EXIT_MIN = 130;
 const BACK_SAFE_THRESHOLD = 145;
 
 const MIN_REP_INTERVAL_MS = 900;
-const SMOOTHING_WINDOW    = 5;
-const UI_INTERVAL_MS      = 100;
+const SMOOTHING_WINDOW = 5;
+const UI_INTERVAL_MS = 100;
 
 const LM = {
   LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
@@ -32,14 +32,13 @@ const LM = {
   LEFT_KNEE: 25, RIGHT_KNEE: 26,
   LEFT_ANKLE: 27, RIGHT_ANKLE: 28,
 } as const;
-
 type PoseSide = "left" | "right";
 
-// ===== helpers =====
+// ===== مساعدات =====
 const visOK = (l?: NormalizedLandmark | null, min = MIN_VISIBILITY) =>
   !!l && (l.visibility ?? 0) >= min;
 
-const angleAt = (b: NormalizedLandmark, a: NormalizedLandmark, c: NormalizedLandmark) => {
+function angleAt(b: NormalizedLandmark, a: NormalizedLandmark, c: NormalizedLandmark) {
   const v1x = a.x - b.x, v1y = a.y - b.y;
   const v2x = c.x - b.x, v2y = c.y - b.y;
   const dot = v1x * v2x + v1y * v2y;
@@ -48,7 +47,7 @@ const angleAt = (b: NormalizedLandmark, a: NormalizedLandmark, c: NormalizedLand
   let cos = dot / (m1 * m2);
   cos = Math.max(-1, Math.min(1, cos));
   return (Math.acos(cos) * 180) / Math.PI;
-};
+}
 
 function movingAverage(arr: number[], window = SMOOTHING_WINDOW) {
   const n = Math.min(arr.length, window);
@@ -79,7 +78,6 @@ function pickSide(lms: NormalizedLandmark[]): PoseSide | null {
   return null;
 }
 
-// يكفي أن ساق واحدة داخلة الإطار ومتمركزة تقريبا
 function relaxedInFrame(lms: NormalizedLandmark[], side: PoseSide) {
   const hip   = lms[side === "left" ? LM.LEFT_HIP   : LM.RIGHT_HIP];
   const knee  = lms[side === "left" ? LM.LEFT_KNEE  : LM.RIGHT_KNEE];
@@ -105,24 +103,31 @@ const ExerciseCoach: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
-  const streamRef     = useRef<MediaStream | null>(null);
-  const rafRef        = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const rafRef = useRef<number | null>(null);
 
-  const [ready, setReady]     = useState(false);
+  const [ready, setReady] = useState(false);
   const [running, setRunning] = useState(false);
 
   const [kneeAngle, setKneeAngle] = useState(0);
   const [backAngle, setBackAngle] = useState(0);
-  const [reps, setReps]           = useState(0);
-  const [cue, setCue]             = useState("");
+  const [reps, setReps] = useState(0);
+  const [cue, setCue] = useState("");
 
+  // سلاسل للتنعيم
   const kneeSeries = useRef<number[]>([]);
   const backSeries = useRef<number[]>([]);
-  const inDown     = useRef(false);
-  const lastRepTs  = useRef(0);
-  const uiTs       = useRef(0);
 
-  // تحميل الـWASM + الموديل (FULL) مرّة واحدة
+  // العد
+  const inDown = useRef(false);
+  const lastRepTs = useRef(0);
+  const uiTs = useRef(0);
+
+  // تشخيص
+  const firstFrames = useRef(0);
+  const loggedNoLandmarks = useRef(false);
+
+  // تحميل mediapipe مرّة واحدة
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -133,16 +138,16 @@ const ExerciseCoach: React.FC = () => {
           baseOptions: { modelAssetPath: MODEL_PATH },
           runningMode: "VIDEO",
           numPoses: 1,
-          // ↓↓↓ عتبات ثقة أدنى لالتقاط أوضح
-          minPoseDetectionConfidence: 0.25,
-          minPosePresenceConfidence: 0.25,
-          minTrackingConfidence: 0.25,
+          minPoseDetectionConfidence: 0.2,
+          minPosePresenceConfidence: 0.2,
+          minTrackingConfidence: 0.2,
         });
         if (cancelled) return;
         landmarkerRef.current = landmarker;
         setReady(true);
+        console.log("✅ PoseLandmarker initialized");
       } catch (e) {
-        console.error("Failed to init mediapipe:", e);
+        console.error("❌ Failed to init PoseLandmarker/WASM. Check paths:", e);
       }
     })();
     return () => { cancelled = true; };
@@ -153,26 +158,30 @@ const ExerciseCoach: React.FC = () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: "user",  // بدّل إلى "environment" لو تبغى الخلفية
+          facingMode: "user", // بدّل إلى "environment" لو تبغى الكاميرا الخلفية
           width: { ideal: 640 }, height: { ideal: 480 },
           frameRate: { ideal: 30, max: 30 },
         },
         audio: false,
       });
       streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
+      const video = videoRef.current;
+      video.srcObject = stream;
 
-      const vw = videoRef.current.videoWidth  || 640;
-      const vh = videoRef.current.videoHeight || 480;
-      const canvas = canvasRef.current!;
-      canvas.width = vw; canvas.height = vh;
+      // مهم جدًا: ابدأ اللوب فقط بعد onloadedmetadata
+      video.onloadedmetadata = async () => {
+        await video.play();
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 480;
+        const canvas = canvasRef.current!;
+        canvas.width = vw; canvas.height = vh;
 
-      setRunning(true);
-      detectLoop();
+        setRunning(true);
+        detectLoop();
+      };
     } catch (e) {
-      console.error("Camera error:", e);
-      setCue("فعّل إذن الكاميرا ثم أعد المحاولة.");
+      console.error("❌ Camera error:", e);
+      setCue("تعذّر الوصول للكاميرا. فعّل الأذونات.");
     }
   }, []);
 
@@ -189,21 +198,21 @@ const ExerciseCoach: React.FC = () => {
     return () => { stopCamera(); landmarkerRef.current?.close(); };
   }, [stopCamera]);
 
-  // الرسم والحساب والعد
   const drawAndCount = useCallback((lms?: NormalizedLandmark[]) => {
     const canvas = canvasRef.current, video = videoRef.current;
     if (!canvas || !video) return;
-
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    if (!lms || !lms.length) { setCue("حرّك للخلف قليلًا حتى تظهر ساقك."); return; }
+    if (!lms || !lms.length) {
+      setCue("خلّ الركبة والكاحل يظهران بوضوح داخل الإطار.");
+      return;
+    }
 
     const side = pickSide(lms);
     if (!side) { setCue("وجّه الكاميرا نحو الساق (ورك/ركبة/كاحل)."); return; }
-
     if (!relaxedInFrame(lms, side)) {
-      setCue("خلّ الساق داخل الإطار مع هامش بسيط عن الحواف.");
+      setCue("حرّك الكاميرا قليلًا حتى تكون الساق داخل الإطار وبعيدة عن الحواف.");
       return;
     }
 
@@ -212,8 +221,8 @@ const ExerciseCoach: React.FC = () => {
     const knee     = lms[side === "left" ? LM.LEFT_KNEE     : LM.RIGHT_KNEE];
     const ankle    = lms[side === "left" ? LM.LEFT_ANKLE    : LM.RIGHT_ANKLE];
 
-    const utils = new DrawingUtils(ctx as unknown as CanvasRenderingContext2D);
-    utils.drawLandmarks([hip, knee, ankle].filter(Boolean) as any, { radius: 2 });
+    const util = new DrawingUtils(ctx as unknown as CanvasRenderingContext2D);
+    util.drawLandmarks([hip, knee, ankle].filter(Boolean) as any, { radius: 2 });
 
     const kneeDeg = angleAt(knee, hip, ankle);
     let backDeg: number | undefined;
@@ -237,9 +246,7 @@ const ExerciseCoach: React.FC = () => {
       setCue(backOK ? "" : "حافظ على استقامة ظهرك!");
     }
 
-    // هستيرسِس للعد
     if (!inDown.current && kneeSm <= KNEE_DOWN_ENTER_MAX) inDown.current = true;
-
     const backOK = backDeg === undefined || movingAverage(backSeries.current) >= BACK_SAFE_THRESHOLD;
     if (inDown.current && kneeSm >= KNEE_DOWN_EXIT_MIN && kneeSm >= KNEE_UP_THRESHOLD && backOK) {
       if (now - lastRepTs.current >= MIN_REP_INTERVAL_MS) {
@@ -250,30 +257,43 @@ const ExerciseCoach: React.FC = () => {
     }
   }, []);
 
-  // حل التزامن: نسخة callback من detectForVideo
+  // لوب كشف المتزامن (المجرّب)
   const detectLoop = useCallback(() => {
     const landmarker = landmarkerRef.current;
     const video = videoRef.current;
     if (!landmarker || !video) return;
 
-    const step = (ts?: number) => {
+    const step = () => {
       if (!running) return;
-      const now = typeof ts === "number" ? ts : performance.now();
 
       try {
-        // استخدام callback يضمن وصول النتيجة متزامنة مع الفريم
-        landmarker.detectForVideo(video, now, (res) => {
-          const lms = res?.landmarks?.[0];
-          if (lms) drawAndCount(lms);
-        });
-      } catch {
-        // تجاهل الأخطاء العابرة
+        const res = landmarker.detectForVideo(video, performance.now());
+        const lms = res?.landmarks?.[0];
+
+        // تشخيص مبدئي: أول 30 فريم لو ما فيه لاندماركس سجّل سبب محتمل
+        if (firstFrames.current < 30) {
+          firstFrames.current++;
+          if (!lms && !loggedNoLandmarks.current) {
+            loggedNoLandmarks.current = true;
+            console.warn(
+              "⚠️ لا توجد لاندماركس. أسباب شائعة:\n" +
+              "- مسار MODEL_PATH أو WASM_BASE_URL خطأ.\n" +
+              "- ملف .task مفقود (full أو lite).\n" +
+              "- الفيديو أبعاده صفر (ابدأ بعد onloadedmetadata).\n" +
+              "- الإطار لا يظهر الورك+الركبة+الكاحل بوضوح."
+            );
+          }
+        }
+
+        if (lms) drawAndCount(lms);
+      } catch (e) {
+        // نتجاهل الأخطاء العابرة
       }
 
       if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
-        (video as any).requestVideoFrameCallback(step);
+        (video as any).requestVideoFrameCallback(() => step());
       } else {
-        rafRef.current = requestAnimationFrame(() => step());
+        rafRef.current = requestAnimationFrame(step);
       }
     };
 
@@ -310,9 +330,8 @@ const ExerciseCoach: React.FC = () => {
           <div><span className="font-semibold">Knee angle:</span> {kneeAngle}°</div>
           <div><span className="font-semibold">Back angle:</span> {backAngle}°</div>
           <ul className="mt-4 list-disc ms-5 text-base text-gray-700">
-            <li>يكفي أن تظهر الساق (ورك-ركبة-كاحل) داخل الإطار.</li>
-            <li>قرّب الكاميرا بزاوية تسمح برؤية الركبة والكاحل بوضوح.</li>
-            <li>لو الزوايا صفر، تأكد أن الورك والركبة ظاهرين (من منتصف الجسم إلى أسفل).</li>
+            <li>يكفي ظهور الساق (ورك–ركبة–كاحل) داخل الإطار وبعيد عن الحواف.</li>
+            <li>لو الزوايا 0°: تأكّد أن ملف الموديل موجود وأن المسارات صحيحة.</li>
           </ul>
         </div>
       </div>
