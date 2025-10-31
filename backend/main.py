@@ -16,6 +16,18 @@ from starlette.responses import Response, JSONResponse
 from .config import FRONTEND_ORIGIN, OPENAI_API_KEY, OPENAI_MODEL
 from .logic import analyze_selection
 from .muscle_data import BODY_MAP, BodySideKey
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # بعد ما تتأكد بدّلها لدومينك
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.options("/{rest_of_path:path}")
+async def preflight(...):  # يرجّع 204
+    ...
 
 logger = logging.getLogger(__name__)
 
