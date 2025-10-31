@@ -206,7 +206,7 @@ export default function Diagnosis() {
 
       <section className="max-w-5xl mx-auto p-6 space-y-8" dir="rtl">
         <header className="text-center space-y-3">
-          <h1 className="text-زxl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
+          <h1 className="text-2xl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
           <p className="text-gray-600 text-sm md:text-base">{INTRO_TEXT}</p>
         </header>
 
