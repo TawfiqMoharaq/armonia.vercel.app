@@ -11,48 +11,42 @@ const KNEE_DOWN_MIN = 70;
 const KNEE_DOWN_MAX = 100;
 const BACK_SAFE_THRESHOLD = 150;
 
-function toDeg(value: number) {
-  return (value * 180) / Math.PI;
-}
+function toDeg(v: number) { return (v * 180) / Math.PI; }
 
 function angle(a?: Keypoint, c?: Keypoint, b?: Keypoint) {
   if (!a || !b || !c) return null;
-  const v1 = [a.x - c.x, a.y - c.y];
-  const v2 = [b.x - c.x, b.y - c.y];
-  const dot = v1[0] * v2[0] + v1[1] * v2[1];
-  const m1 = Math.hypot(v1[0], v1[1]);
-  const m2 = Math.hypot(v2[0], v2[1]);
+  const v1 = [a.x - c.x, a.y - c.y], v2 = [b.x - c.x, b.y - c.y];
+  const dot = v1[0]*v2[0] + v1[1]*v2[1];
+  const m1 = Math.hypot(v1[0], v1[1]), m2 = Math.hypot(v2[0], v2[1]);
   if (!m1 || !m2) return null;
-  const cosine = Math.min(Math.max(dot / (m1 * m2), -1), 1);
+  const cosine = Math.min(Math.max(dot / (m1*m2), -1), 1);
   return toDeg(Math.acos(cosine));
 }
 
-function byName(keypoints: Keypoint[], name: string) {
-  return keypoints.find((k) => (k as any).name === name);
+function byName(kps: Keypoint[], name: string) {
+  return kps.find((k) => (k as any).name === name);
 }
 
-function pickLeg(keypoints: Keypoint[]) {
+function pickLeg(kps: Keypoint[]) {
   const left = {
-    shoulder: byName(keypoints, "left_shoulder"),
-    hip: byName(keypoints, "left_hip"),
-    knee: byName(keypoints, "left_knee"),
-    ankle: byName(keypoints, "left_ankle"),
+    shoulder: byName(kps, "left_shoulder"),
+    hip:      byName(kps, "left_hip"),
+    knee:     byName(kps, "left_knee"),
+    ankle:    byName(kps, "left_ankle"),
   };
   const right = {
-    shoulder: byName(keypoints, "right_shoulder"),
-    hip: byName(keypoints, "right_hip"),
-    knee: byName(keypoints, "right_knee"),
-    ankle: byName(keypoints, "right_ankle"),
+    shoulder: byName(kps, "right_shoulder"),
+    hip:      byName(kps, "right_hip"),
+    knee:     byName(kps, "right_knee"),
+    ankle:    byName(kps, "right_ankle"),
   };
   const score = (p?: Keypoint) => p?.score ?? 0;
-  const leftScore = score(left.hip) + score(left.knee) + score(left.ankle);
-  const rightScore = score(right.hip) + score(right.knee) + score(right.ankle);
-  return leftScore >= rightScore ? left : right;
+  const l = score(left.hip)+score(left.knee)+score(left.ankle);
+  const r = score(right.hip)+score(right.knee)+score(right.ankle);
+  return l >= r ? left : right;
 }
 
-type Props = {
-  coachType?: CoachKind;
-};
+type Props = { coachType?: CoachKind };
 
 export default function ExerciseCoach({ coachType = "squat" }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -80,13 +74,9 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
         setBackAngle(null);
         setBackWarning(false);
 
-        // TF backend
-        if (tf.getBackend() !== "webgl") {
-          await tf.setBackend("webgl");
-        }
+        if (tf.getBackend() !== "webgl") await tf.setBackend("webgl");
         await tf.ready();
 
-        // ✅ MoveNet with correct enum (no "Lightning" string)
         const detector = await posedetection.createDetector(
           posedetection.SupportedModels.MoveNet,
           {
@@ -101,19 +91,12 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
         }
 
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "user",
-            width: { ideal: 960 },
-            height: { ideal: 720 },
-          },
+          video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
           audio: false,
         });
 
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        if (!video || !canvas) {
-          throw new Error("تعذر العثور على عناصر الفيديو أو اللوحة.");
-        }
+        const video = videoRef.current, canvas = canvasRef.current;
+        if (!video || !canvas) throw new Error("تعذر العثور على عناصر الفيديو أو اللوحة.");
 
         video.srcObject = stream;
         await video.play();
@@ -133,15 +116,10 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
 
         const loop = async () => {
           if (!active) return;
-          const currentDetector = detectorRef.current;
-          if (!currentDetector) {
-            rafRef.current = requestAnimationFrame(loop);
-            return;
-          }
+          const det = detectorRef.current;
+          if (!det) { rafRef.current = requestAnimationFrame(loop); return; }
 
-          const poses = await currentDetector.estimatePoses(video, {
-            flipHorizontal: true, // للكاميرا الأمامية
-          });
+          const poses = await det.estimatePoses(video, { flipHorizontal: true });
 
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -149,13 +127,9 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
           if (poses[0]?.keypoints?.length) {
             const kps = poses[0].keypoints as Keypoint[];
 
-            // نقاط مفصلية
             ctx.fillStyle = "#18A4B8";
-            for (const kp of kps) {
-              if ((kp.score ?? 0) > 0.5) {
-                ctx.fillRect(kp.x - 2, kp.y - 2, 4, 4);
-              }
-            }
+            for (const kp of kps) if ((kp.score ?? 0) > 0.5)
+              ctx.fillRect(kp.x - 2, kp.y - 2, 4, 4);
 
             if (coachType === "squat") {
               const leg = pickLeg(kps);
@@ -163,24 +137,20 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
               const bAng = angle(leg.shoulder, leg.hip, leg.knee);
 
               if (kAng != null) {
-                const rounded = Math.round(kAng);
-                setKneeAngle(rounded);
-                if (rounded >= KNEE_DOWN_MIN && rounded <= KNEE_DOWN_MAX) {
-                  wasDownRef.current = true;
-                }
-                if (rounded >= KNEE_UP_THRESHOLD && wasDownRef.current) {
+                const val = Math.round(kAng);
+                setKneeAngle(val);
+                if (val >= KNEE_DOWN_MIN && val <= KNEE_DOWN_MAX) wasDownRef.current = true;
+                if (val >= KNEE_UP_THRESHOLD && wasDownRef.current) {
                   wasDownRef.current = false;
                   setRepCount((c) => c + 1);
                 }
               }
 
               if (bAng != null) {
-                const rounded = Math.round(bAng);
-                setBackAngle(rounded);
-                setBackWarning(rounded < BACK_SAFE_THRESHOLD);
-              } else {
-                setBackWarning(false);
-              }
+                const val = Math.round(bAng);
+                setBackAngle(val);
+                setBackWarning(val < BACK_SAFE_THRESHOLD);
+              } else setBackWarning(false);
             }
           }
 
@@ -204,24 +174,18 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
 
     return () => {
       active = false;
-
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-
+      if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
       const video = videoRef.current;
       if (video) {
         if (syncHandler) {
           video.removeEventListener("loadedmetadata", syncHandler);
           video.removeEventListener("resize", syncHandler);
         }
-        const mediaStream = video.srcObject as MediaStream | null;
-        if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+        const s = video.srcObject as MediaStream | null;
+        s?.getTracks().forEach((t) => t.stop());
         video.pause();
         video.srcObject = null;
       }
-
       detectorRef.current?.dispose?.();
       detectorRef.current = null;
     };
@@ -251,11 +215,10 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
 
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
-          <p className="text-sm leading-relaxed" dir="rtl">
-            {error}
-          </p>
+          <p className="text-sm leading-relaxed" dir="rtl">{error}</p>
         </div>
       )}
+
       {backWarning && !error && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg">
           حافظ على استقامة ظهرك!
