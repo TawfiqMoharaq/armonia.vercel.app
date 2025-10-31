@@ -1,211 +1,154 @@
-<!-- بدّل سكربت الصفحة بهذا فقط -->
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<title>Camera Squat Tracking</title>
+
+<style>
+  body {
+    background: #111;
+    margin: 0;
+    color: white;
+    font-family: sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+  }
+  #container {
+    width: 90vw;
+    max-width: 1100px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+  }
+  video, canvas {
+    width: 100%;
+    height: 450px;
+    background: black;
+    border-radius: 20px;
+  }
+  #btnStart {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    background: #0078ff;
+    color: white;
+    padding: 10px 18px;
+    border-radius: 12px;
+    cursor: pointer;
+    font-weight: bold;
+    border: none;
+  }
+  #info {
+    margin-top: 10px;
+    white-space: pre-line;
+    font-size: 16px;
+  }
+</style>
+
+</head>
+<body>
+
+<button id="btnStart">تشغيل الكاميرا</button>
+
+<div id="container">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+</div>
+
+<div id="info">جاهز ✅</div>
+
+<!-- ✅ تحميل Mediapipe Vision bundle من unpkg بسبب مشاكل jsDelivr -->
+<script src="https://unpkg.com/@mediapipe/tasks-vision@0.10.22/vision_bundle.js"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
 <script>
-(function () {
-  if (!window.vision) {
-    alert("تعذر تحميل مكتبة MediaPipe (vision_bundle). تحقق من الشبكة/الإضافات ثم حدّث الصفحة.");
-    return;
-  }
-  const { FilesetResolver, PoseLandmarker } = window.vision;
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
+let info = document.getElementById("info");
+let landmarker = null;
+let animationFrame;
+let reps = 0;
+let wasDown = false;
 
-  // عناصر
-  const startBtn = document.getElementById("startBtn");
-  const stopBtn  = document.getElementById("stopBtn");
-  const video    = document.getElementById("video");
-  const canvas   = document.getElementById("canvas");
-  const ctx      = canvas.getContext("2d");
-  const errBox   = document.getElementById("err");
-  const repsEl   = document.getElementById("reps");
-  const kneevEl  = document.getElementById("kneev");
-  const backvEl  = document.getElementById("backv");
+const WASM_BASE = "https://unpkg.com/@mediapipe/tasks-vision@0.10.22/wasm";
 
-  // زر اختبار سريع بدون MediaPipe (أضفه فوق زر تشغيل الكاميرا لمرة واحدة)
-  if (!document.getElementById("testBtn")) {
-    const testBtn = document.createElement("button");
-    testBtn.id = "testBtn";
-    testBtn.textContent = "اختبار بسيط (بدون تتبع)";
-    testBtn.style.marginInlineStart = "8px";
-    startBtn.parentElement.insertBefore(testBtn, startBtn.nextSibling);
-    testBtn.onclick = testCameraOnly;
-  }
+// ✅ حساب الزوايا
+function angle(a, b, c) {
+  const ab = {x: a.x-b.x, y:a.y-b.y};
+  const cb = {x: c.x-b.x, y:c.y-b.y};
+  const dot = ab.x*cb.x + ab.y*cb.y;
+  const magAB = Math.hypot(ab.x, ab.y);
+  const magCB = Math.hypot(cb.x, cb.y);
+  if (!magAB || !magCB) return 0;
+  return Math.acos(dot / (magAB * magCB)) * (180/Math.PI);
+}
 
-  // ثوابت
-  const MODEL_URLS = [
-    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
-    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/latest/pose_landmarker_lite.task",
-    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float32/latest/pose_landmarker_full.task",
-  ];
-  const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
-  const KNEE_UP = 160, KNEE_DOWN_MIN = 70, KNEE_DOWN_MAX = 100;
+async function initModel() {
+  info.innerText = "جارِ تحميل نموذج تتبع الجسم...";
+  const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+  landmarker = await PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+    },
+    runningMode: "VIDEO",
+    numPoses: 1
+  });
 
-  // حالة
-  let landmarker = null, raf = 0, wasDown = false, reps = 0;
+  info.innerText = "✅ تم تحميل النموذج — شغّل الكاميرا";
+}
 
-  // أدوات
-  const toDeg = r => (r*180)/Math.PI;
-  function ang(a,c,b){
-    if(!a||!b||!c) return null;
-    const v1=[a.x-c.x,a.y-c.y,a.z-c.z], v2=[b.x-c.x,b.y-c.y,b.z-c.z];
-    const dot=v1[0]*v2[0]+v1[1]*v2[1]+v1[2]*v2[2];
-    const m1=Math.hypot(...v1),m2=Math.hypot(...v2);
-    if(!m1||!m2) return null;
-    return toDeg(Math.acos(Math.min(Math.max(dot/(m1*m2),-1),1)));
-  }
-  const pickLeg=(lms)=> {
-    const L={shoulder:11,hip:23,knee:25,ankle:27}, R={shoulder:12,hip:24,knee:26,ankle:28};
-    const vis=i=>lms[i]?.visibility??0;
-    const s=x=>vis(x.hip)+vis(x.knee)+vis(x.ankle);
-    return s(L)>=s(R)?L:R;
-  };
-  const showError=(m)=>{errBox.style.display="flex";errBox.textContent=String(m||"خطأ غير متوقع")};
-  const hideError=()=>{errBox.style.display="none";errBox.textContent=""};
-
-  function syncSize(){
-    // اجبر الكانفس ياخذ حجم الفيديو عند الجاهزية؛ وإلا استخدم 640×480
-    const w = video.videoWidth || 640;
-    const h = video.videoHeight || 480;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height!== h) canvas.height= h;
-  }
-  function stopAll(){
-    cancelAnimationFrame(raf);
-    const s=video.srcObject; if(s) s.getTracks().forEach(t=>t.stop());
-    video.srcObject=null;
-    landmarker?.close?.(); landmarker=null;
-    stopBtn.disabled=true; startBtn.disabled=false;
-  }
-  async function getStreamWithFallback(){
-    const tries = [
-      { video:{ facingMode:"user", width:{ideal:960}, height:{ideal:720} }, audio:false },
-      { video:{ width:{ideal:640}, height:{ideal:480} }, audio:false },
-      { video:true, audio:false },
-    ];
-    let last;
-    for (const c of tries) {
-      try { return await navigator.mediaDevices.getUserMedia(c); }
-      catch(e){ last = e; }
-    }
-    throw last || new Error("تعذر تشغيل الكاميرا. تحقق من الإذن ومن عدم انشغالها بتطبيق آخر.");
-  }
-
-  // اختبار بسيط للكاميرا بدون MediaPipe
-  async function testCameraOnly(){
-    hideError();
-    try{
-      if (!navigator.mediaDevices?.getUserMedia)
-        throw new Error("المتصفح لا يدعم getUserMedia.");
-      if (!window.isSecureContext)
-        throw new Error("هذه الصفحة ليست HTTPS. استخدم https أو localhost.");
-
-      const s = await getStreamWithFallback();
-      video.srcObject = s;
-      video.muted = true; video.playsInline = true;
-      await video.play();
-      // اعرض الفيديو نفسه مباشرة للتأكد
-      syncSize();
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      ctx.font = "16px sans-serif";
-      ctx.fillStyle = "#fff";
-      ctx.fillText("تشغيل الكاميرا OK (بدون تتبع).", 12, 24);
-    }catch(e){
-      showError(describeGUMError(e));
-    }
-  }
-
-  function describeGUMError(err){
-    const n = err?.name || "";
-    switch(n){
-      case "NotAllowedError": return "تم رفض إذن الكاميرا. افتح إعدادات الموقع واجعل Camera: Allow ثم أعد المحاولة.";
-      case "NotFoundError": return "لم يتم العثور على كاميرا. اختر الجهاز الصحيح أو صِل كاميرا.";
-      case "NotReadableError": return "لا يمكن فتح الكاميرا (قد تكون مشغولة بتطبيق آخر). أغلق Zoom/Teams وغيرها.";
-      case "OverconstrainedError": return "إعدادات الدقّة غير مدعومة. تم تخفيض الطلب تلقائيًا—جرّب مجددًا.";
-      case "SecurityError": return "الوصول للكاميرا يتطلب HTTPS.";
-      default: return `${n || "Error"}: ${err?.message || err}`;
-    }
-  }
-
-  async function start(){
-    try{
-      startBtn.disabled = true; hideError();
-      reps=0; wasDown=false; repsEl.textContent="0"; kneevEl.textContent="—"; backvEl.textContent="—";
-
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error("المتصفح لا يدعم getUserMedia.");
-      if (!window.isSecureContext) throw new Error("الصفحة ليست HTTPS.");
-
-      // شغّل الكاميرا أولاً (لو فشل نعرض رسالة واضحة)
-      const stream = await getStreamWithFallback();
-      video.srcObject = stream;
-      video.muted = true; video.playsInline = true;
-      await video.play();
-
-      // مزامنة المقاس + متابعة أي تغيّر
-      syncSize();
-      let tries = 0;
-      while ((video.videoWidth === 0 || video.videoHeight === 0) && tries < 20) {
-        await new Promise(r => setTimeout(r, 100));
-        tries++;
-        syncSize();
-      }
-      video.addEventListener("loadedmetadata", syncSize);
-      video.addEventListener("resize", syncSize);
-
-      // حمّل الموديل (Lite → Full)
-      const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm");
-      let err=null;
-      for (const url of MODEL_URLS){
-        try{
-          landmarker = await PoseLandmarker.createFromOptions(fileset, {
-            baseOptions: { modelAssetPath: url },
-            runningMode: "VIDEO",
-            numPoses: 1
-          });
-          err=null; break;
-        }catch(e){ err=e; }
-      }
-      if (!landmarker) throw err || new Error("فشل تحميل نموذج التتبّع.");
-
-      stopBtn.disabled = false;
+async function startCamera() {
+  info.innerText = "طلب الكاميرا...";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode:"user", width:1280, height:720}
+    });
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      info.innerText = "📹 الكاميرا تعمل — قم بالتحرك!";
       loop();
-    }catch(e){
-      showError(describeGUMError(e));
-      startBtn.disabled=false; stopBtn.disabled=true;
+    };
+  } catch(e) {
+    info.innerText = "❌ تم رفض إذن الوصول للكاميرا. اسمح من القفل بجوار الرابط.";
+  }
+}
+
+function loop() {
+  animationFrame = requestAnimationFrame(loop);
+  if (!landmarker || video.readyState < 2) return;
+
+  const now = performance.now();
+  const result = landmarker.detectForVideo(video, now);
+
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  if (result.landmarks.length > 0) {
+    const lms = result.landmarks[0];
+    const hip = lms[23], knee = lms[25], ankle = lms[27];
+    const kneeAngle = angle(hip, knee, ankle);
+
+    ctx.fillStyle = "yellow";
+    ctx.fillText(`Knee: ${Math.round(kneeAngle)}°`, 20, 30);
+    ctx.fillText(`Reps: ${reps}`, 20, 60);
+
+    if (kneeAngle < 100) wasDown = true;
+    if (kneeAngle > 160 && wasDown) {
+      reps++;
+      wasDown = false;
     }
   }
+}
 
-  function loop(){
-    if (!landmarker) return;
+document.getElementById("btnStart").addEventListener("click", startCamera);
 
-    // تأكد دائمًا من المقاس (بعض الأجهزة تغيّر أبعاد الفيديو بعد التشغيل)
-    syncSize();
-
-    const t = performance.now();
-    const out = landmarker.detectForVideo(video, t);
-
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.drawImage(video,0,0,canvas.width,canvas.height);
-
-    if (out.landmarks.length){
-      const lms = out.landmarks[0];
-      const side = pickLeg(lms);
-      const hip=lms[side.hip], knee=lms[side.knee], ankle=lms[side.ankle], shoulder=lms[side.shoulder];
-
-      const kneeA = ang(hip,knee,ankle);
-      const backA = ang(shoulder,hip,knee);
-
-      if (kneeA!=null){
-        const k=Math.round(kneeA);
-        kneevEl.textContent=k;
-        if (k<=KNEE_DOWN_MIN && k>=KNEE_DOWN_MAX) wasDown=true;
-        if (k>=KNEE_UP && wasDown){ wasDown=false; reps++; repsEl.textContent=String(reps); }
-      } else { kneevEl.textContent="—"; }
-
-      backvEl.textContent = backA!=null ? Math.round(backA) : "—";
-    }
-
-    raf = requestAnimationFrame(loop);
-  }
-
-  startBtn.addEventListener("click", start);
-  stopBtn .addEventListener("click", stopAll);
-  window.addEventListener("beforeunload", stopAll);
-})();
+initModel(); 
 </script>
+
+</body>
+</html>
