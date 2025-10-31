@@ -1,281 +1,99 @@
-<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>كاميرا + تتبّع الوضعيات (Vanilla)</title>
-  <style>
-    :root { --card: #fff; --border: #e5e7eb; --ink: #0b1320; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Arial; background:#f7f9fb; color:var(--ink); }
-    .container { padding: 20px; display: grid; gap: 16px; grid-template-columns: 1fr; }
-    @media (min-width: 960px) { .container { grid-template-columns: 1fr 1fr; } }
+<script>
+  const { FilesetResolver, PoseLandmarker, DrawingUtils } = window.vision;
 
-    .card { position: relative; border: 1px solid var(--border); background: #000; border-radius: 20px; overflow: hidden; min-height: 320px; }
-    .card.white { background: var(--card); }
-    .pad { padding: 12px; }
+  const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
+  const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
 
-    video, canvas { display: block; width: 100%; height: auto; }
-    .hud { position: absolute; top: 10px; left: 10px; color: #fff; background:#0009; padding: 8px 12px; border-radius: 12px; font-size: 14px; }
-    .error { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: #fff; background:#000a; padding: 18px; text-align: center; white-space: pre-wrap; line-height: 1.6; }
+  const startBtn = document.getElementById("startBtn");
+  const stopBtn  = document.getElementById("stopBtn");
+  const video    = document.getElementById("video");
+  const canvas   = document.getElementById("canvas");
+  const ctx      = canvas.getContext("2d");
+  const errBox   = document.getElementById("err");
+  const repsEl   = document.getElementById("reps");
+  const kneeEl   = document.getElementById("knee");
+  const backEl   = document.getElementById("back");
 
-    .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    button { padding:10px 14px; border-radius:12px; border:1px solid var(--border); background:#0a6d8b; color:#fff; cursor:pointer; font-weight:600; }
-    button:disabled { opacity:.6; cursor: not-allowed; }
-    .hint { font-size:13px; color:#445; }
-  </style>
-</head>
-<body>
-  <div class="pad">
-    <div class="row">
-      <button id="startBtn">تشغيل الكاميرا</button>
-      <button id="stopBtn" disabled>إيقاف</button>
-      <span class="hint">ملاحظة: يلزم <b>HTTPS</b> والسماح للكاميرا. إذا رفضت من قبل، غيّر الإذن من إعدادات الموقع ثم أعد المحاولة.</span>
-    </div>
-  </div>
+  let landmarker = null;
+  let raf = 0;
+  let wasDown = false;
+  let reps = 0;
 
-  <div class="container">
-    <!-- الكاميرا + الرسم -->
-    <div class="card" id="camCard">
-      <video id="video" playsinline muted></video>
-      <canvas id="canvas"></canvas>
+  function toDeg(r) { return (r * 180) / Math.PI; }
+  function angle(a,c,b) {
+    if (!a||!b||!c) return null;
+    const v1 = [a.x-c.x, a.y-c.y, a.z-c.z];
+    const v2 = [b.x-c.x, b.y-c.y, b.z-c.z];
+    const dot = v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2];
+    const m1 = Math.hypot(...v1), m2 = Math.hypot(...v2);
+    if (!m1 || !m2) return null;
+    return toDeg(Math.acos(Math.min(Math.max(dot/(m1*m2),-1),1)));
+  }
 
-      <div class="hud">
-        Reps: <b id="reps">0</b> |
-        Knee: <span id="knee">—</span>° |
-        Back: <span id="back">—</span>°
-      </div>
+  async function startCamera() {
+    startBtn.disabled = true;
+    errBox.style.display = "none";
+    reps = 0; wasDown = false;
 
-      <div id="err" class="error"></div>
-    </div>
+    try {
+      const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+      landmarker = await PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL_URL },
+        runningMode: "VIDEO",
+        numPoses: 1,
+      });
 
-    <!-- مثال GIF/شرح (اختياري) -->
-    <div class="card white">
-      <img src="/gifs/squat.gif" alt="demo" style="width:100%;height:auto;display:block;object-fit:contain;background:#fff" />
-    </div>
-  </div>
+      const stream = await navigator.mediaDevices.getUserMedia({ video:true });
+      video.srcObject = stream;
+      await video.play();
 
-  <!-- سكربت في آخر الصفحة لضمان جاهزية العناصر -->
-  <script type="module">
-    // ===================== ثوابت عامة =====================
-    const MODEL_CANDIDATES = [
-      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
-      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/latest/pose_landmarker_lite.task",
-      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float32/latest/pose_landmarker_full.task",
-    ];
-    const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
-
-    const KNEE_UP_THRESHOLD = 160;
-    const KNEE_DOWN_MIN = 70;
-    const KNEE_DOWN_MAX = 100;
-    const BACK_SAFE_THRESHOLD = 150;
-
-    // ===================== عناصر الصفحة =====================
-    const startBtn = document.getElementById("startBtn");
-    const stopBtn  = document.getElementById("stopBtn");
-    const video    = document.getElementById("video");
-    const canvas   = document.getElementById("canvas");
-    const ctx      = canvas.getContext("2d");
-    const errBox   = document.getElementById("err");
-    const repsEl   = document.getElementById("reps");
-    const kneeEl   = document.getElementById("knee");
-    const backEl   = document.getElementById("back");
-
-    // ===================== متغيرات تشغيل =====================
-    let vision = null;           // مكتبة mediapipe (يتم استيرادها ديناميكيًا)
-    let landmarker = null;       // الكائن المسؤول عن التتبّع
-    let raf = 0;                 // requestAnimationFrame id
-    let wasDown = false;         // حالة السكوات
-    let reps = 0;                // العدّاد
-
-    // ===================== أدوات مساعدة =====================
-    const toDeg = r => (r * 180) / Math.PI;
-    const angle3D = (a,c,b) => {
-      if (!a||!b||!c) return null;
-      const v1 = [a.x-c.x, a.y-c.y, a.z-c.z];
-      const v2 = [b.x-c.x, b.y-c.y, b.z-c.z];
-      const dot = v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2];
-      const m1 = Math.hypot(v1[0], v1[1], v1[2]);
-      const m2 = Math.hypot(v2[0], v2[1], v2[2]);
-      if (!m1 || !m2) return null;
-      const cos = Math.min(Math.max(dot/(m1*m2), -1), 1);
-      return toDeg(Math.acos(cos));
-    };
-    const pickLeg = (lms) => {
-      const L={shoulder:11, hip:23, knee:25, ankle:27};
-      const R={shoulder:12, hip:24, knee:26, ankle:28};
-      const vis = i => lms[i]?.visibility ?? 0;
-      const s = side => vis(side.hip)+vis(side.knee)+vis(side.ankle);
-      return s(L) >= s(R) ? L : R;
-    };
-    const showError = (msg) => { errBox.style.display = "flex"; errBox.textContent = String(msg); };
-    const hideError = () => { errBox.style.display = "none"; errBox.textContent = ""; };
-
-    async function getStream() {
-      const tryList = [
-        { video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } }, audio: false },
-        { video: true, audio: false },
-      ];
-      let last;
-      for (const c of tryList) {
-        try { return await navigator.mediaDevices.getUserMedia(c); }
-        catch (e) { last = e; }
-      }
-      throw last || new Error("تعذر تشغيل الكاميرا. تحقق من الإذن ومن عدم انشغالها بتطبيق آخر.");
-    }
-
-    function syncCanvasSize() {
-      if (video.videoWidth && video.videoHeight) {
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
-      }
-    }
-
-    function resetHUD() {
-      reps = 0; wasDown = false;
-      repsEl.textContent = "0";
-      kneeEl.textContent = "—";
-      backEl.textContent = "—";
-    }
-
-    function stopAll() {
-      cancelAnimationFrame(raf);
-      const s = video.srcObject;
-      if (s) s.getTracks().forEach(t => t.stop());
-      video.srcObject = null;
-      landmarker?.close?.();
-      landmarker = null;
+      loop();
+      stopBtn.disabled = false;
+    } catch (e) {
+      errBox.textContent = e.message;
+      errBox.style.display = "flex";
       startBtn.disabled = false;
-      stopBtn.disabled  = true;
     }
+  }
 
-    async function start() {
-      try {
-        startBtn.disabled = true;
-        hideError();
-        resetHUD();
+  function loop() {
+    const now = performance.now();
+    const result = landmarker.detectForVideo(video, now);
 
-        if (!navigator.mediaDevices?.getUserMedia)
-          throw new Error("المتصفح لا يدعم getUserMedia.");
-        if (!window.isSecureContext)
-          throw new Error("هذه الصفحة ليست آمنة (HTTPS). افتح عبر https أو localhost.");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // استيراد المكتبة وقت الضغط (لتفادي أخطاء تحميل قبل DOM)
-        if (!vision) {
-          vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22");
+    if (result.landmarks.length) {
+      const [lms] = result.landmarks;
+      const leg = { shoulder:11, hip:23, knee:25, ankle:27 };
+
+      const k = angle(lms[leg.hip], lms[leg.knee], lms[leg.ankle]);
+      if (k != null) {
+        const kv = Math.round(k);
+        kneeEl.textContent = kv;
+        if (kv > 160 && wasDown) {
+          wasDown = false;
+          reps++;
+          repsEl.textContent = reps;
         }
-        const { FilesetResolver, PoseLandmarker } = vision;
-
-        // Fileset (WASM) + محاولة تحميل النموذج: GPU → CPU و Lite → Full
-        const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-        let lastErr = null;
-        landmarker = null;
-        for (const delegate of ["GPU","CPU"]) {
-          for (const url of MODEL_CANDIDATES) {
-            try {
-              landmarker = await PoseLandmarker.createFromOptions(fileset, {
-                baseOptions: { modelAssetPath: url },
-                runningMode: "VIDEO",
-                numPoses: 1,
-                delegate,
-              });
-              console.info("[PoseLandmarker] Loaded:", delegate, url);
-              lastErr = null;
-              break;
-            } catch (e) {
-              lastErr = e;
-              console.warn("[PoseLandmarker] Failed:", delegate, url, e);
-            }
-          }
-          if (!lastErr) break;
-        }
-        if (!landmarker) throw lastErr || new Error("فشل تحميل نموذج التتبّع.");
-
-        // تشغيل الكاميرا
-        const stream = await getStream();
-        video.srcObject = stream;
-        video.muted = true; video.playsInline = true;
-
-        // نضمن الجاهزية
-        await video.play().catch(()=>{});
-        if (video.readyState < 2) {
-          await new Promise(res => video.onloadeddata = res);
-        }
-
-        // ضبط مقاس الكانفس
-        syncCanvasSize();
-        video.addEventListener("loadedmetadata", syncCanvasSize);
-        video.addEventListener("resize", syncCanvasSize);
-
-        // ابدأ اللوب
-        stopBtn.disabled = false;
-        loop();
-      } catch (e) {
-        console.error(e);
-        showError(e?.message || "تعذر بدء تشغيل المدرب.");
-        startBtn.disabled = false;
-        stopBtn.disabled  = true;
-      }
-    }
-
-    function loop() {
-      if (!landmarker) return;
-
-      const now = performance.now();
-      const out = landmarker.detectForVideo(video, now);
-
-      // ارسم إطار الفيديو أولاً
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      if (out.landmarks.length) {
-        const lms = out.landmarks[0];
-
-        // نقاط مرئية بسيطة
-        ctx.fillStyle = "#18A4B8";
-        for (const p of lms) if ((p.visibility ?? 0) > 0.65) {
-          ctx.fillRect(p.x * canvas.width - 2, p.y * canvas.height - 2, 4, 4);
-        }
-
-        // اختيار الرجل ذات الرؤية الأعلى
-        const side = pickLeg(lms);
-        const hip = lms[side.hip], knee = lms[side.knee], ankle = lms[side.ankle], shoulder = lms[side.shoulder];
-
-        // زوايا الركبة والظهر
-        const k = angle3D(hip, knee, ankle);
-        const b = angle3D(shoulder, hip, knee);
-
-        if (k != null) {
-          const kv = Math.round(k);
-          kneeEl.textContent = kv;
-          if (kv >= KNEE_DOWN_MIN && kv <= KNEE_DOWN_MAX) wasDown = true;
-          if (kv >= KNEE_UP_THRESHOLD && wasDown) {
-            wasDown = false;
-            reps += 1;
-            repsEl.textContent = String(reps);
-          }
-        } else {
-          kneeEl.textContent = "—";
-        }
-
-        if (b != null) {
-          const bv = Math.round(b);
-          backEl.textContent = bv;
-          // بإمكانك إضافة تحذير إن bv < BACK_SAFE_THRESHOLD
-        } else {
-          backEl.textContent = "—";
-        }
+        if (kv < 100) wasDown = true;
       }
 
-      raf = requestAnimationFrame(loop);
+      const b = angle(lms[leg.shoulder], lms[leg.hip], lms[leg.knee]);
+      backEl.textContent = b != null ? Math.round(b) : "—";
     }
 
-    // أحداث الأزرار
-    startBtn.addEventListener("click", start);
-    stopBtn.addEventListener("click", stopAll);
+    raf = requestAnimationFrame(loop);
+  }
 
-    // تنظيف عند إغلاق/تحديث الصفحة
-    window.addEventListener("beforeunload", stopAll);
-  </script>
-</body>
-</html>
+  function stopCamera() {
+    cancelAnimationFrame(raf);
+    const s = video.srcObject;
+    if (s) s.getTracks().forEach(t => t.stop());
+    landmarker?.close?.();
+    stopBtn.disabled = true;
+    startBtn.disabled = false;
+  }
+
+  startBtn.onclick = startCamera;
+  stopBtn.onclick = stopCamera;
+</script>
