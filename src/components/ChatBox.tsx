@@ -1,18 +1,15 @@
 // src/components/ChatBox.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { exercises } from "../data/exercises";
-import ExerciseCard from "./ExerciseCard"; // إذا عندك الكارد في ملف مستقل
+import ExerciseCard from "./ExerciseCard";
+import { findExerciseByName } from "../data/exercises";
+import type { Exercise } from "../data/exercises";
 
-/* ======================= إيجاد التمرين من قاعدة بياناتك ======================= */
-function findExercise(payload: any) {
-  if (!payload?.exercise) return null;
-  const name = String(payload.exercise).toLowerCase().trim();
-  return exercises.find(
-    (ex) =>
-      ex.name.toLowerCase() === name ||
-      (Array.isArray(ex.aliases) && ex.aliases.some((a: string) => a.toLowerCase() === name))
-  );
+/* ======================= ربط payload بقاعدة التمارين ======================= */
+function pickExerciseFromPayload(payload: any): Exercise | null {
+  const name = payload?.exercise;
+  if (!name) return null;
+  return findExerciseByName(String(name));
 }
 
 /* ======================= تنظيف واستخراج ======================= */
@@ -250,7 +247,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   useEffect(() => {
     if (!autoSentRef.current && muscles && muscles.length > 0) {
       autoSentRef.current = true;
-      // رسالة قصيرة جداً عشان الـbackend يقرر وبسرعة
+      // رسالة قصيرة جداً — الباكيند سيعتمد على العضلات الممرّرة في context
       sendMessage("شعور بسيط بالألم — خلنا نبدأ بخطة آمنة 💪");
     }
   }, [muscles]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -273,7 +270,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
           </div>
         ) : (
           messages.map((m) => {
-            const fullExercise = findExercise(m.raw?.payload);
+            const fullExercise = pickExerciseFromPayload(m.raw?.payload);
 
             return (
               <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -309,7 +306,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
                     {m.pretty}
                   </ReactMarkdown>
 
-                  {/* ✅ بطاقة التمرين من قاعدة بياناتك */}
+                  {/* ✅ بطاقة التمرين (من قاعدة بياناتك) */}
                   {fullExercise && <ExerciseCard exercise={fullExercise} />}
                 </div>
               </div>
