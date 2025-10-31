@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import quote_plus
 from uuid import uuid4
 
@@ -22,83 +21,30 @@ logger = logging.getLogger(__name__)
 
 MAX_HISTORY_MESSAGES = 24
 SYSTEM_PROMPT = (
-    "أنت مدرب لياقة افتراضي بلهجة سعودية لطيفة. قدّم معلومات عملية بدون تشخيص طبي.\n"
-    "أعطِ الرد في ثلاثة أقسام واضحة بالعناوين التالية وبالترتيب:\n"
-    "1) **الإحماء (2–3 دقائق):** نقطتان إلى ثلاث نقاط.\n"
-    "2) **التمرين الرئيسي:** اسم التمرين + عدد/مدة + 3 نصائح تطبيقية.\n"
-    "3) **الإطالة بعد التمرين (1–2 دقيقة):** نقطتان إلى ثلاث نقاط.\n"
-    "تذكير سلامة قصير بنهاية الرد (سطر واحد).\n"
-    "اكتب تقريبًا 8–12 سطرًا (مختصر لكن كافي)، ولا تستخدم أي JSON داخل ui_text.\n"
-    "مخرجاتك يجب أن تكون JSON مطابق للسكيمة التالية فقط، بدون أسوار كود وبدون نص خارجي:\n"
-    "{\n"
-    '  "ui_text": "نص عربي منسق للمستخدم (Markdown بسيط: عناوين الأقسام + نقاط)",\n'
-    '  "payload": {\n'
-    '     "exercise": "اسم التمرين بالإنجليزي أو العربي",\n'
-    '     "reps": "مثلاً: 3×10 أو 30–45s",\n'
-    '     "tips": ["نقطة قصيرة","نقطة قصيرة"]\n'
-    "  }\n"
-    "}\n"
+    "أنت مدرب لياقة افتراضي يتكلم بلهجة سعودية بسيطة. حافظ على الإرشادات عملية وواضحة بدون تشخيص طبي. "
+    "ذكّر المستخدم دائماً بالسلامة، الإحماء، والتوقف إذا زاد الألم. لا تكرر نفس الجمل وقدّم خطوات مختصرة وواضحة."
 )
-
-# ... نفس الكود ...
-
-JSON_SCHEMA = {
-    "name": "coach_response",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "ui_text": {
-                "type": "string",
-                "description": "Markdown عربي مرتب: عناوين الأقسام + نقاط"
-            },
-            "payload": {
-                "type": "object",
-                "properties": {
-                    "exercise": {"type": "string"},
-                    "reps": {"type": "string"},
-                    "tips": {"type": "array", "items": {"type": "string"}}
-                },
-                "additionalProperties": True
-            }
-        },
-        "required": ["ui_text", "payload"],
-        "additionalProperties": True
-    }
-}
-
-# داخل _handle_chat: زِد الماكس توكنز شوية
-completion = await asyncio.to_thread(
-    client.chat.completions.create,
-    model=OPENAI_MODEL or "gpt-4o-mini",
-    messages=request_messages,
-    temperature=0.6,
-    max_tokens=700,  # ← كان 350
-    response_format={"type": "json_schema", "json_schema": JSON_SCHEMA},
-)
-
 
 app = FastAPI(title="Armonia Coaching API")
 
-# ===================== CORS =====================
-PROD_ORIGIN = (FRONTEND_ORIGIN or "").strip()
-VercelPreviewRegex = r"^https://([a-z0-9-]+\.)*vercel\.app$"
 
-_allowed_origins: List[str] = []
-if PROD_ORIGIN:
-    _allowed_origins.append(PROD_ORIGIN)
-_allowed_origins += ["http://localhost:5173", "http://127.0.0.1:5173"]
+def _parse_origins(origin_setting: str) -> List[str]:
+    if origin_setting.strip() == "*":
+        return ["*"]
+    return [origin.strip() for origin in origin_setting.split(",") if origin.strip()]
+
+
+# بدّل الكتلة الحالية بهذا السطرين:
+origin_regex = r"https://.*vercel\.app$|http://localhost:5173"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_origin_regex=VercelPreviewRegex,
+    allow_origin_regex=origin_regex,  # ← استخدم regex بدل allow_origins
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
-    expose_headers=["Content-Type"],
-    max_age=86400,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# =================== نهاية CORS =========================
+
 
 
 class Muscle(BaseModel):
@@ -120,13 +66,8 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    # الحقول الجديدة
-    ui_text: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
-    # توافق خلفي مع الواجهة الحالية
-    reply: str
-    # باقي الحقول كما هي
     session_id: str
+    reply: str
     turns: int
     usedOpenAI: bool
     youtube: str
@@ -195,7 +136,7 @@ def _youtube_link(context: ChatContext) -> str:
     return "https://www.youtube.com/results?search_query=mobility+exercise+routine"
 
 
-def _fallback_message(user_message: str, youtube: str) -> Dict[str, Any]:
+def _fallback_message(user_message: str, youtube: str) -> str:
     text = user_message.lower()
     if "سلام" in text:
         prefix = "وعليكم السلام! السيرفر مو متصل حالياً."
@@ -203,8 +144,7 @@ def _fallback_message(user_message: str, youtube: str) -> Dict[str, Any]:
         prefix = "أدري إن عندك سؤال مهم بس الخدمة متوقفة مؤقتاً."
     else:
         prefix = "العذر والسموحة، الخدمة متوقفة مؤقتاً."
-    ui = f"{prefix} تقدر تشوف التمرين المقترح هنا: {youtube}"
-    return {"ui_text": ui, "payload": {"status": "fallback"}}
+    return f"{prefix} تقدر تشوف التمرين المقترح هنا: {youtube}"
 
 
 async def _update_session(session_id: str, user_text: str, assistant_text: str) -> int:
@@ -250,34 +190,6 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     return AnalyzeResponse(results=muscles)
 
 
-# ========= سكيمة الاستجابة من النموذج =========
-JSON_SCHEMA = {
-    "name": "coach_response",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "ui_text": {
-                "type": "string",
-                "description": "نص عربي منسق للمستخدم (Markdown بسيط بدون أسوار كود وبدون JSON داخله)."
-            },
-            "payload": {
-                "type": "object",
-                "description": "بيانات منظمة للاستخدام الداخلي (غير معروضة للمستخدم).",
-                "properties": {
-                    "exercise": {"type": "string"},
-                    "reps": {"type": "string"},
-                    "tips": {"type": "array", "items": {"type": "string"}}
-                },
-                "additionalProperties": True
-            }
-        },
-        "required": ["ui_text", "payload"],
-        "additionalProperties": True
-    }
-}
-# ============================================
-
-
 async def _handle_chat(payload: ChatRequest) -> ChatResponse:
     session_id = payload.session_id or uuid4().hex
     history = await _get_history(session_id)
@@ -290,8 +202,7 @@ async def _handle_chat(payload: ChatRequest) -> ChatResponse:
 
     youtube = _youtube_link(payload.context)
 
-    ui_text = ""
-    payload_obj: Dict[str, Any] = {}
+    reply_text = ""
     used_openai = False
 
     if client:
@@ -301,47 +212,24 @@ async def _handle_chat(payload: ChatRequest) -> ChatResponse:
                 model=OPENAI_MODEL or "gpt-4o-mini",
                 messages=request_messages,
                 temperature=0.6,
-                max_tokens=700,
-                response_format={"type": "json_schema", "json_schema": JSON_SCHEMA},
+                max_tokens=350,
             )
-            raw = (completion.choices[0].message.content or "").strip()
-            data = json.loads(raw)
-            ui_text = (data.get("ui_text") or "").strip()
-            payload_obj = data.get("payload") or {}
+            reply_text = (completion.choices[0].message.content or "").strip()
             used_openai = True
-            if not ui_text:
-                ui_text = "تم تجهيز إرشاداتك. ابدأ بإحماء خفيف 2–3 دقائق ثم اتبع الخطوات المقترحة."
-
-
-            raw = (completion.choices[0].message.content or "").strip()
-            # يجب أن يكون JSON صافي وفق السكيمة
-            data = json.loads(raw)
-            ui_text = (data.get("ui_text") or "").strip()
-            payload_obj = data.get("payload") or {}
-            used_openai = True
-
-            # حماية إضافية: لو النموذج خالف التعليمات
-            if not ui_text:
-                ui_text = "تم تجهيز إرشاداتك. جرّب وضعية الجسم المريحة وابدأ بإحماء خفيف 5–10 دقائق."
-        except Exception as exc:  # يشمل فشل JSON/شبكة
+        except (ValueError, IndexError) as exc:
             logger.exception("OpenAI chat completion failed: %s", exc)
-            fb = _fallback_message(payload.user_message, youtube)
-            ui_text = fb["ui_text"]
-            payload_obj = fb["payload"]
+            reply_text = _fallback_message(payload.user_message, youtube)
+        except Exception as exc:  # pragma: no cover
+            logger.exception("Unexpected error from OpenAI: %s", exc)
+            reply_text = _fallback_message(payload.user_message, youtube)
     else:
-        fb = _fallback_message(payload.user_message, youtube)
-        ui_text = fb["ui_text"]
-        payload_obj = fb["payload"]
+        reply_text = _fallback_message(payload.user_message, youtube)
 
-    # نخزن في السيشن "نص العرض" فقط (بدون JSON)
-    turns = await _update_session(session_id, payload.user_message, ui_text)
+    turns = await _update_session(session_id, payload.user_message, reply_text)
 
-    # توافق خلفي: reply = ui_text
     return ChatResponse(
         session_id=session_id,
-        ui_text=ui_text,
-        payload=payload_obj,
-        reply=ui_text,
+        reply=reply_text,
         turns=turns,
         usedOpenAI=used_openai,
         youtube=youtube,
