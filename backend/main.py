@@ -1,5 +1,4 @@
 """FastAPI backend powering chat coaching and muscle selection APIs."""
-
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from starlette.responses import Response
+from starlette.responses import Response, JSONResponse
 
 from .config import FRONTEND_ORIGIN, OPENAI_API_KEY, OPENAI_MODEL
 from .logic import analyze_selection
@@ -28,28 +27,21 @@ SYSTEM_PROMPT = (
 
 app = FastAPI(title="Armonia Coaching API")
 
-# ---------------------- CORS (مهم لحل مشكلة المتصفح) ---------------------- #
-# عدّل هذا إلى دومين الفرونت عندك على Vercel
-VERCEL_ORIGIN = "https://armonia-vercel-app-liart.vercel.app"
-
-# Regex يسمح بأي سب دومين من vercel.app + localhost للتطوير
-origin_regex = r"^https://([a-z0-9-]+\.)*vercel\.app$|^http://localhost(:\d+)?$"
-
+# ---------------- CORS (قوي ومباشر) ----------------
+# للتجربة السريعة: افتح للجميع. بعد ما تتأكد، بدّلها لقائمة allow_origins=[...]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[VERCEL_ORIGIN],   # تصريح صريح لدومينك
-    allow_origin_regex=origin_regex, # ومعه Regex عام
+    allow_origins=["*"],          # ← بعد التأكد بدّلها: ["https://armonia-vercel-app-liart.vercel.app", "http://localhost:5173"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ نضمن أن أي طلب OPTIONS (preflight) يرجع 204 مع هيدرز CORS
+# نضمن أن أي preflight ينجح حتى لو المسار مش موجود
 @app.options("/{rest_of_path:path}")
 async def preflight(_: Request, rest_of_path: str) -> Response:
     return Response(status_code=204)
-# -------------------------------------------------------------------------- #
-
+# ---------------------------------------------------
 
 class Muscle(BaseModel):
     muscle_ar: str
@@ -57,17 +49,14 @@ class Muscle(BaseModel):
     region: str
     prob: float = Field(ge=0.0, le=1.0)
 
-
 class ChatContext(BaseModel):
     muscles: List[Muscle] = Field(default_factory=list)
-
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     user_message: str = Field(..., min_length=1)
     context: ChatContext = Field(default_factory=ChatContext)
     language: str = Field(default="ar")
-
 
 class ChatResponse(BaseModel):
     session_id: str
@@ -76,21 +65,17 @@ class ChatResponse(BaseModel):
     usedOpenAI: bool
     youtube: str
 
-
 class CirclePayload(BaseModel):
     cx: float = Field(ge=0.0, le=1.0)
     cy: float = Field(ge=0.0, le=1.0)
     radius: float = Field(gt=0.0, le=0.6)
 
-
 class AnalyzeRequest(BaseModel):
     side: BodySideKey
     circle: CirclePayload
 
-
 class AnalyzeResponse(BaseModel):
     results: List[Muscle]
-
 
 SESSIONS: Dict[str, List[Dict[str, str]]] = {}
 SESSIONS_LOCK = asyncio.Lock()
@@ -103,10 +88,8 @@ if OPENAI_API_KEY:
         logger.exception("Failed to initialise OpenAI client: %s", exc)
         client = None
 
-
 def _initial_history() -> List[Dict[str, str]]:
     return [{"role": "system", "content": SYSTEM_PROMPT}]
-
 
 def _prune_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
     if not history:
@@ -117,19 +100,14 @@ def _prune_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
     trimmed = conversational[-MAX_HISTORY_MESSAGES:]
     return base_system + trimmed
 
-
 def _build_context_message(context: ChatContext) -> Optional[Dict[str, str]]:
     if not context.muscles:
         return None
-
     lines = ["سياق عضلي مختصر:"]
     for muscle in context.muscles[:6]:
         percent = round(muscle.prob * 100)
-        lines.append(
-            f"- {muscle.muscle_ar} ({muscle.muscle_en}) | المنطقة: {muscle.region} | الاحتمال التقريبي: {percent}%"
-        )
+        lines.append(f"- {muscle.muscle_ar} ({muscle.muscle_en}) | المنطقة: {muscle.region} | الاحتمال التقريبي: {percent}%")
     return {"role": "system", "content": "\n".join(lines)}
-
 
 def _youtube_link(context: ChatContext) -> str:
     if context.muscles:
@@ -138,7 +116,6 @@ def _youtube_link(context: ChatContext) -> str:
             query = quote_plus(f"bodyweight exercise {nearest.muscle_en}")
             return f"https://www.youtube.com/results?search_query={query}"
     return "https://www.youtube.com/results?search_query=mobility+exercise+routine"
-
 
 def _fallback_message(user_message: str, youtube: str) -> str:
     text = user_message.lower()
@@ -150,7 +127,6 @@ def _fallback_message(user_message: str, youtube: str) -> str:
         prefix = "العذر والسموحة، الخدمة متوقفة مؤقتاً."
     return f"{prefix} تقدر تشوف التمرين المقترح هنا: {youtube}"
 
-
 async def _update_session(session_id: str, user_text: str, assistant_text: str) -> int:
     async with SESSIONS_LOCK:
         history = SESSIONS.setdefault(session_id, _initial_history())
@@ -161,12 +137,14 @@ async def _update_session(session_id: str, user_text: str, assistant_text: str) 
         turns = sum(1 for message in pruned if message["role"] == "assistant")
         return turns
 
-
 async def _get_history(session_id: str) -> List[Dict[str, str]]:
     async with SESSIONS_LOCK:
         history = SESSIONS.setdefault(session_id, _initial_history())
         return list(history)
 
+@app.get("/")
+async def root():
+    return {"ok": True}
 
 @app.get("/health")
 async def health() -> Dict[str, object]:
@@ -177,23 +155,24 @@ async def health() -> Dict[str, object]:
         "frontend_origin": FRONTEND_ORIGIN,
     }
 
-
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
-    results = analyze_selection(
-        payload.side, payload.circle.cx, payload.circle.cy, payload.circle.radius
-    )
-    muscles = [
-        Muscle(
-            muscle_ar=item["muscle_ar"],
-            muscle_en=item["muscle_en"],
-            region=item["region"],
-            prob=float(item["prob"]),
-        )
-        for item in results
-    ]
-    return AnalyzeResponse(results=muscles)
-
+    try:
+        results = analyze_selection(payload.side, payload.circle.cx, payload.circle.cy, payload.circle.radius)
+        muscles = [
+            Muscle(
+                muscle_ar=item["muscle_ar"],
+                muscle_en=item["muscle_en"],
+                region=item["region"],
+                prob=float(item["prob"]),
+            )
+            for item in results
+        ]
+        return AnalyzeResponse(results=muscles)
+    except Exception as e:
+        # لا ترجع 500 بدون جسم — رجّع JSON واضح
+        logger.exception("analyze failed: %s", e)
+        return AnalyzeResponse(results=[])
 
 async def _handle_chat(payload: ChatRequest) -> ChatResponse:
     session_id = payload.session_id or uuid4().hex
@@ -221,11 +200,8 @@ async def _handle_chat(payload: ChatRequest) -> ChatResponse:
             )
             reply_text = (completion.choices[0].message.content or "").strip()
             used_openai = True
-        except (ValueError, IndexError) as exc:
+        except Exception as exc:
             logger.exception("OpenAI chat completion failed: %s", exc)
-            reply_text = _fallback_message(payload.user_message, youtube)
-        except Exception as exc:  # pragma: no cover
-            logger.exception("Unexpected error from OpenAI: %s", exc)
             reply_text = _fallback_message(payload.user_message, youtube)
     else:
         reply_text = _fallback_message(payload.user_message, youtube)
@@ -240,11 +216,9 @@ async def _handle_chat(payload: ChatRequest) -> ChatResponse:
         youtube=youtube,
     )
 
-
 @app.post("/api/chat/send", response_model=ChatResponse)
 async def send_chat(payload: ChatRequest) -> ChatResponse:
     return await _handle_chat(payload)
-
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def send_chat_alias(payload: ChatRequest) -> ChatResponse:
