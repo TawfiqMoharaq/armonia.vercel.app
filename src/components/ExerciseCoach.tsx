@@ -28,10 +28,10 @@ const WASM_BASE_URL = "/vendor/mediapipe/0.10.22/wasm";
 const MIRROR = true;
 
 // حدود السكوات
-const KNEE_UP_THRESHOLD = 160;
-const KNEE_DOWN_MIN = 70;
-const KNEE_DOWN_MAX = 100;
-const BACK_SAFE_THRESHOLD = 150;
+const KNEE_UP_THRESHOLD = 160; // تمدّد كامل
+const KNEE_DOWN_MIN = 70;      // قاع سكوات مقبول
+const KNEE_DOWN_MAX = 100;     // حد علوي للقاع
+const BACK_SAFE_THRESHOLD = 150; // ظهر شبه مستقيم
 
 // فلترة/جودة
 const V_TORSO_MIN = 0.55;
@@ -117,6 +117,18 @@ function isPoseQualityGood(lms: NormalizedLandmark[]): boolean {
   return true;
 }
 
+/* ------------------------------ UI helpers --------------------------------- */
+
+function Badge({ok, warnText, okText}: {ok:boolean, warnText:string, okText:string}) {
+  return (
+    <span className={`inline-block px-2 py-0.5 rounded-lg text-xs font-semibold ${
+      ok ? "bg-emerald-600/25 text-emerald-300" : "bg-amber-600/25 text-amber-200"
+    }`}>
+      {ok ? okText : warnText}
+    </span>
+  );
+}
+
 /* -------------------------------- Component -------------------------------- */
 
 export default function ExerciseCoach() {
@@ -140,7 +152,7 @@ export default function ExerciseCoach() {
   const [backAngle, setBackAngle] = useState<number | null>(null);
   const [backWarning, setBackWarning] = useState(false);
 
-  // لوحة النصائح (يمكن إخفاؤها/إظهارها)
+  // عرض/إخفاء السايدبار على الشاشات الصغيرة
   const [showTips, setShowTips] = useState(true);
 
   useEffect(() => {
@@ -208,8 +220,8 @@ export default function ExerciseCoach() {
         canvas.height = video.videoHeight;
       };
       syncCanvas();
-      video.addEventListener("loadedmetadata", syncCanvas, { passive: true });
-      video.addEventListener("resize", syncCanvas, { passive: true });
+      video.addEventListener("loadedmetadata", syncCanvas, { passive: true } as any);
+      video.addEventListener("resize", syncCanvas, { passive: true } as any);
 
       setRunning(true);
       loop();
@@ -265,10 +277,10 @@ export default function ExerciseCoach() {
       ctx.lineWidth = 3;
       ctx.strokeStyle = "white";
       ctx.fillStyle = "white";
-      ctx.shadowColor = "rgba(0,0,0,0.8)";
-      ctx.shadowBlur = 6;
+      (ctx as any).shadowColor = "rgba(0,0,0,0.8)";
+      (ctx as any).shadowBlur = 6;
 
-      const drawer = new DrawingUtils(ctx);
+      const drawer = new DrawingUtils(ctx as any);
       drawer.drawConnectors(smooth, POSE_CONNECTIONS);
       drawer.drawLandmarks(smooth, { radius: 4, visibilityMin: 0.65, fillColor: "white" });
 
@@ -286,19 +298,15 @@ export default function ExerciseCoach() {
 
         if (k != null) {
           const r = clampInt(k);
-          if (r != null) {
-            if (Math.abs((lastSampleRef.current.knee) - r) >= 1) setKneeAngle(r);
-            lastSampleRef.current.knee = r;
-          }
+          if (r != null) setKneeAngle((prev) => (prev === r ? prev : r));
+          lastSampleRef.current.knee = r ?? lastSampleRef.current.knee;
         } else setKneeAngle(null);
 
         if (b != null) {
           const r = clampInt(b);
-          if (r != null) {
-            if (Math.abs((lastSampleRef.current.back) - r) >= 1) setBackAngle(r);
-            lastSampleRef.current.back = r;
-          }
+          if (r != null) setBackAngle((prev) => (prev === r ? prev : r));
           setBackWarning(b < BACK_SAFE_THRESHOLD);
+          lastSampleRef.current.back = r ?? lastSampleRef.current.back;
         } else {
           setBackAngle(null);
           setBackWarning(false);
@@ -362,81 +370,127 @@ export default function ExerciseCoach() {
     };
   }, []);
 
+  // حالات نصائح السكوات (تتحدّث لحظيًا)
+  const depthOk = kneeAngle != null && kneeAngle <= KNEE_DOWN_MAX;
+  const depthAlmost = kneeAngle != null && kneeAngle > KNEE_DOWN_MAX && kneeAngle <= 120;
+  const backOk = backAngle != null && backAngle >= BACK_SAFE_THRESHOLD;
+  const atBottom = phaseRef.current === "BOTTOM_HOLD";
+
   return (
-    <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/20 bg-black shadow">
-      {!running && (
-        <button
-          onClick={startCamera}
-          disabled={!isReady}
-          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow disabled:opacity-50 bg-blue-600 hover:bg-blue-700"
-        >
-          تشغيل الكاميرا 🎥
-        </button>
-      )}
-      {running && (
-        <button
-          onClick={stopCamera}
-          className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow bg-gray-700 hover:bg-gray-800"
-        >
-          إيقاف
-        </button>
-      )}
+    <div className="grid md:grid-cols-[1fr_minmax(280px,340px)] gap-4 items-start">
+      {/* الكاميرا */}
+      <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/20 bg-black shadow">
+        {!running && (
+          <button
+            onClick={startCamera}
+            disabled={!isReady}
+            className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow disabled:opacity-50 bg-blue-600 hover:bg-blue-700"
+          >
+            تشغيل الكاميرا 🎥
+          </button>
+        )}
+        {running && (
+          <button
+            onClick={stopCamera}
+            className="absolute top-4 left-4 z-10 px-4 py-2 rounded-xl text-white shadow bg-gray-700 hover:bg-gray-800"
+          >
+            إيقاف
+          </button>
+        )}
 
-      <video ref={videoRef} className="hidden" playsInline muted />
-      <canvas ref={canvasRef} className="w-full h-full object-cover" />
+        <video ref={videoRef} className="hidden" playsInline muted />
+        <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-      {/* عدّاد وزوايا */}
-      <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-10">
-        <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
-          <span className="font-semibold text-lg">{repCount}</span>
-          <span>Reps</span>
+        {/* عدّاد وزوايا */}
+        <div className="absolute top-4 right-4 space-y-2 text-white text-sm z-10">
+          <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
+            <span className="font-semibold text-lg">{repCount}</span>
+            <span>Reps</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
+              Knee: {kneeAngle ?? "—"}°
+            </span>
+            <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
+              Back: {backAngle ?? "—"}°
+            </span>
+          </div>
         </div>
-        <div className="flex flex-col gap-1">
-          <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
-            Knee angle: {kneeAngle ?? "—"}°
-          </span>
-          <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
-            Back angle: {backAngle ?? "—"}°
-          </span>
-        </div>
-      </div>
 
-      {/* لوحة نصائح بجانب الكاميرا */}
-      <div className="absolute left-4 bottom-4 z-10">
-        <button
-          onClick={() => setShowTips(s => !s)}
-          className="md:hidden mb-2 px-3 py-1 rounded-xl text-white bg-black/60 backdrop-blur"
-        >
-          {showTips ? "إخفاء النصائح" : "إظهار النصائح"}
-        </button>
+        {/* أخطاء فقط — لا شاشة تحميل */}
+        {cameraError && (
+          <div className="absolute inset-x-0 bottom-0 m-4 px-4 py-3 rounded-xl bg-red-600/90 text-white text-sm z-10">
+            {cameraError}
+          </div>
+        )}
 
-        {showTips && (
-          <div className="max-w-[340px] md:max-w-[360px] px-4 py-3 rounded-2xl text-white bg-black/55 backdrop-blur shadow">
-            <div className="font-semibold mb-2">نصائح سريعة:</div>
-            <ul className="list-disc ps-5 space-y-1 text-sm leading-6">
-              <li>إضاءة أمامية جيدة، وخلفية بسيطة بدون فوضى.</li>
-              <li>ضع الكاميرا على مستوى الصدر أو الخصر، وبمسافة تُظهر الجسم كاملاً.</li>
-              <li>قف في منتصف الإطار واترك مسافة كافية للأطراف.</li>
-              <li>ارتدِ ملابس متباينة اللون عن الخلفية لزيادة التتبّع.</li>
-              <li>انزل ببطء واثبت في القاع ثانية ثم اطلع بهدوء.</li>
-              <li>توقف إذا شعرت بألم، واحفظ استقامة الظهر دائماً.</li>
-            </ul>
+        {backWarning && running && !cameraError && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg">
+            حافظ على استقامة ظهرك!
           </div>
         )}
       </div>
 
-      {/* لا نعرض شاشة التحميل إطلاقاً — نعرض الخطأ فقط */}
-      {cameraError && (
-        <div className="absolute inset-x-0 bottom-0 m-4 px-4 py-3 rounded-xl bg-red-600/90 text-white text-sm z-10">
-          {cameraError}
+      {/* سايدبار النصائح — لا يغطي الكاميرا */}
+      <aside className="md:sticky md:top-4">
+        <div className="mb-2 md:hidden">
+          <button
+            onClick={() => setShowTips((s) => !s)}
+            className="px-3 py-1 rounded-xl text-white bg-black/60 backdrop-blur"
+          >
+            {showTips ? "إخفاء النصائح" : "إظهار النصائح"}
+          </button>
         </div>
-      )}
 
-      {backWarning && running && !cameraError && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg">
-          حافظ على استقامة ظهرك!
-        </div>
-      )}
+        {showTips && (
+          <div className="px-4 py-4 rounded-2xl text-white bg-black/55 backdrop-blur shadow space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-lg">نصائح السكوات</h3>
+              <div className="text-xs text-white/80">تتحدّث تلقائيًا</div>
+            </div>
+
+            {/* حالة فورية */}
+            <div className="flex flex-wrap gap-2">
+              <Badge ok={!!backOk} okText="ظهر مستقيم" warnText="عدّل استقامة الظهر" />
+              <Badge ok={!!depthOk} okText="عمق ممتاز" warnText={depthAlmost ? "قرّب للقاع" : "انزل أكثر قليلًا"} />
+              <Badge ok={atBottom} okText="ثبات جيد" warnText="ثبّت ثانية بالقاع" />
+            </div>
+
+            <ul className="list-disc ps-5 space-y-2 text-sm leading-6">
+              <li>افتح القدمين بعرض الكتفين والركبتان باتجاه أصابع القدم.</li>
+              <li>انزل حتى يكون <b>زاوية الركبة بين 70–100°</b> ثم اثبت ثانية واحدة.</li>
+              <li>أبقِ <b>الصدر مرفوعًا</b> و<strong>الظهر ≥ {BACK_SAFE_THRESHOLD}°</strong> (محايد بدون تقوّس).</li>
+              <li>ادفع الأرض بالكعب أثناء الصعود حتى <b>تمتد الركبة ~{KNEE_UP_THRESHOLD}°</b> بدون قفلٍ عنيف.</li>
+              <li>تنفّس: نزولًا شهيق هادئ، صعودًا زفير ودفع.</li>
+              <li>كرّر بعدّة منتظمة؛ الجودة أهم من السرعة.</li>
+            </ul>
+
+            {/* لمحة أرقام سريعة */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">زاوية الركبة</div>
+                <div className="text-base font-semibold">{kneeAngle ?? "—"}°</div>
+              </div>
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">زاوية الظهر</div>
+                <div className="text-base font-semibold">{backAngle ?? "—"}°</div>
+              </div>
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">الوضع</div>
+                <div className="text-base font-semibold">
+                  {running ? (phaseRef.current === "UP" ? "فوق" :
+                               phaseRef.current === "GOING_DOWN" ? "نزول" :
+                               phaseRef.current === "BOTTOM_HOLD" ? "ثبات" : "طلوع") : "متوقف"}
+                </div>
+              </div>
+              <div className="rounded-xl bg-white/5 p-2">
+                <div className="opacity-80">العدّات</div>
+                <div className="text-base font-semibold">{repCount}</div>
+              </div>
+            </div>
+          </div>
+        )}
+      </aside>
     </div>
   );
 }
