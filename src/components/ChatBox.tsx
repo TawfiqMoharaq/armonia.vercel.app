@@ -2,37 +2,83 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
-/* ======================= تنظيف النص ======================= */
-// يحذف أي أسوار كود (بما فيها ```json ... ```)
+/* ======================= تنظيف واستخراج ======================= */
+// يحذف أسوار الكود (``` و ```json)
 const stripCodeFences = (t: string) =>
   (t ?? "")
     .replace(/```json[\s\S]*?```/gi, "")
     .replace(/```[\s\S]*?```/g, "");
 
-// يحاول إزالة كتل JSON غير المُسوّرة والأسطر الشبيهة بـ JSON
-const stripInlineJson = (t: string) => {
-  let out = t.replace(/\bjson\b/gi, "");          // إزالة كلمة json المتناثرة
-  out = out.replace(/\{[\s\S]{20,}\}/g, "");      // إزالة كتل { ... } الكبيرة
-  out = out.replace(/^\s*"?[a-zA-Z0-9_]+"?\s*:\s*.+$/gm, ""); // إزالة أسطر "key": value
-  return out;
-};
+// يحاول إزالة بقايا مفاتيح JSON أينما ظهرت داخل النص
+const stripJsonKeysEverywhere = (t: string) =>
+  t
+    // امسح كلمة json المتناثرة
+    .replace(/\bjson\b/gi, "")
+    // امسح أزواج "المفتاح":القيمة الشائعة (ui_text, payload, exercise, reps, tips)
+    .replace(
+      /"?(ui_text|payload|exercise|reps|tips)"?\s*:\s*(\{[^}]*\}|\[[^\]]*\]|"(?:\\.|[^"\\])*"|[^,}\n]+)\s*,?/gi,
+      ""
+    )
+    // امسح أي كتل { ... } طويلة (سطر واحد أو متعددة الأسطر)
+    .replace(/\{[\s\S]{10,}\}/g, "");
 
-// تنظيف شامل: إزالة أسوار الكود + أي JSON طائش + ترتيب الأسطر
+// تنظيف شامل
 const cleanModelText = (t: string) => {
-  const noFences = stripCodeFences(t);
-  const noJson = stripInlineJson(noFences);
-  return noJson.replace(/\n{3,}/g, "\n\n").trim();
+  const noFences = stripCodeFences(t ?? "");
+  const noJsonLeftovers = stripJsonKeysEverywhere(noFences);
+  return noJsonLeftovers.replace(/\n{3,}/g, "\n\n").trim();
 };
 
-// انتقاء نص العرض من استجابة الـ API (توافق خلفي)
-const pickUiText = (data: any): string => {
-  if (!data) return "";
-  if (typeof data.ui_text === "string" && data.ui_text.trim()) return data.ui_text;
-  if (typeof data.reply === "string" && data.reply.trim()) return data.reply;
-  // fallback
-  return cleanModelText(String(data));
+// محاولات آمنة لفك JSON من نص
+const tryParseJson = (s: unknown): any | null => {
+  if (typeof s !== "string") return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 };
-/* ========================================================= */
+
+// يقتنص قيمة ui_text من سلسلة تشبه JSON حتى لو مو صالحة بالكامل
+const regexExtractUiText = (s: string): string | null => {
+  const m = s.match(/"ui_text"\s*:\s*"(.*?)"/s);
+  if (!m) return null;
+  // نفك الهروب البسيط داخل السلسلة
+  return m[1].replace(/\\"/g, '"').replace(/\\n/g, "\n");
+};
+
+// انتقاء نص العرض والـpayload من استجابة قد تكون مشوّهة
+const extractUiAndPayload = (data: any): { ui: string; payload?: any } => {
+  // الحالة الصحيحة
+  if (data && typeof data === "object") {
+    if (typeof data.ui_text === "string" && data.ui_text.trim()) {
+      return { ui: data.ui_text, payload: data.payload };
+    }
+    // بعض السيرفرات ترجع reply كسلسلة JSON
+    if (typeof data.reply === "string") {
+      const parsed = tryParseJson(data.reply);
+      if (parsed && typeof parsed.ui_text === "string") {
+        return { ui: parsed.ui_text, payload: parsed.payload ?? data.payload };
+      }
+      const picked = regexExtractUiText(data.reply);
+      if (picked) return { ui: picked, payload: data.payload };
+      // لو reply نص عادي
+      return { ui: data.reply, payload: data.payload };
+    }
+  }
+  // لو اللي جاي سلسلة JSON كاملة
+  if (typeof data === "string") {
+    const parsed = tryParseJson(data);
+    if (parsed && typeof parsed.ui_text === "string") {
+      return { ui: parsed.ui_text, payload: parsed.payload };
+    }
+    const picked = regexExtractUiText(data);
+    if (picked) return { ui: picked };
+    return { ui: data };
+  }
+  return { ui: "" };
+};
+/* ============================================================= */
 
 /* ===================== أنواع الداتا ====================== */
 export type Muscle = {
@@ -52,14 +98,14 @@ type ChatRequest = {
 };
 
 type ChatResponse = {
-  ui_text?: string;   // نص العرض الجميل
+  ui_text?: string;
   payload?: {
     exercise?: string;
     reps?: string;
     tips?: string[];
     [k: string]: any;
-  };                  // بيانات داخلية (لا تُعرض)
-  reply?: string;     // توافق خلفي (يساوي ui_text غالبًا)
+  };
+  reply?: string; // أحيانًا ترجع كسلسلة JSON
   session_id: string;
   turns: number;
   usedOpenAI: boolean;
@@ -79,9 +125,7 @@ function ExerciseCard({ payload }: { payload: NonNullable<ChatResponse["payload"
       </div>
       <div className="px-4 py-3 space-y-2">
         <div><span className="font-medium">التمرين:</span> {payload.exercise}</div>
-        {payload.reps && (
-          <div><span className="font-medium">عدد/مدة:</span> {payload.reps}</div>
-        )}
+        {payload.reps && <div><span className="font-medium">عدد/مدة:</span> {payload.reps}</div>}
         {Array.isArray(payload.tips) && payload.tips.length > 0 && (
           <div>
             <div className="font-medium mb-1">نصائح:</div>
@@ -99,13 +143,12 @@ function ExerciseCard({ payload }: { payload: NonNullable<ChatResponse["payload"
 type Message = {
   id: string;
   role: "user" | "assistant";
-  text: string;   // النص الخام
-  pretty: string; // النص المنظّف/المنسّق للعرض
+  text: string;   // النص الخام (قبل التنظيف)
+  pretty: string; // النص المنسّق للعرض (بعد التنظيف القوي)
   raw?: ChatResponse;
 };
 
 type Props = {
-  /** مرّر نتائج /api/analyze هنا ليعرف الشات مكان المشكلة */
   muscles: Muscle[];
 };
 
@@ -116,14 +159,13 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // أطبع قيمة الـ API للتأكد منها في المتصفح
   useEffect(() => {
     console.log("VITE_API_BASE =", API_BASE);
   }, []);
 
   const context = useMemo<ChatContext>(() => ({ muscles: muscles ?? [] }), [muscles]);
 
-  /* ================= إرسال رسالة (مع fallback ذكي) ================= */
+  /* ================= إرسال رسالة ================= */
   const sendMessage = async (userText: string) => {
     const text = userText.trim();
     if (!text) return;
@@ -151,45 +193,31 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         body: JSON.stringify(body),
       });
 
-      // لو الاستجابة مو OK حاول نقرأ النص لتشخيص أوضح
       if (!res.ok) {
         const errText = await res.text().catch(() => "");
         console.error("Chat API HTTP error:", res.status, errText);
         throw new Error(`HTTP ${res.status} ${errText}`);
       }
 
-      // جرّب JSON أولاً، ولو ما نفعت خذ النص الخام
-      let data: ChatResponse | null = null;
+      // حاول JSON، وإلا اقرأ كنص
+      let data: ChatResponse | string;
       try {
         data = (await res.json()) as ChatResponse;
-      } catch (e) {
-        const raw = await res.text().catch(() => "");
-        console.error("Failed to parse JSON. Raw response:", raw);
-        const fallback =
-          raw?.trim() || "تعذر فهم استجابة الخادم. حاول مجددًا لاحقًا.";
-        setMessages((m) => [
-          ...m,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            text: fallback,
-            pretty: cleanModelText(fallback) || fallback,
-          },
-        ]);
-        return;
+      } catch {
+        data = await res.text();
       }
 
-      if (!sessionId) setSessionId(data.session_id);
+      if (typeof data === "object" && data && !sessionId) {
+        setSessionId(data.session_id);
+      }
 
-      // نختار نص العرض ثم ننظفه
-      const ui = pickUiText(data);
+      // استخرج ui_text/ payload مهما كان شكل الاستجابة
+      const { ui, payload } = extractUiAndPayload(data);
+      // نظّف بقوة
       let pretty = cleanModelText(ui);
 
-      // Fallback: إذا التنظيف شال كل شيء، اعرض الخام
-      if (!pretty || !pretty.trim()) {
-        pretty = ui?.trim() || "";
-      }
-      // لو ظل فاضي، اعرض رسالة قصيرة بدل الفراغ
+      // fallback مضمون
+      if (!pretty || !pretty.trim()) pretty = ui?.trim() || "";
       if (!pretty || !pretty.trim()) {
         pretty = "تم تجهيز إرشاداتك. ابدأ بإحماء خفيف (5–10 دقائق) ثم اتبع الخطوات المقترحة.";
       }
@@ -199,7 +227,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
         role: "assistant",
         text: ui,
         pretty,
-        raw: data, // payload موجود هنا لبطاقة التمرين
+        raw: typeof data === "object" ? { ...(data as any), payload: (payload ?? (data as any).payload) } : undefined,
       };
 
       setMessages((m) => [...m, botMsg]);
@@ -230,7 +258,6 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
   };
 
   /* ============ إرسال تلقائي عند تحديد العضلة ============ */
-  // أول ما تتوفر muscles غير فارغة، نرسل طلب تشخيص تلقائي مرة واحدة
   const autoSentRef = useRef(false);
   useEffect(() => {
     if (!autoSentRef.current && muscles && muscles.length > 0) {
@@ -295,7 +322,7 @@ const ChatBox: React.FC<Props> = ({ muscles }) => {
                   {m.pretty}
                 </ReactMarkdown>
 
-                {/* بطاقة التمرين لو موجودة في payload لهذا الرد */}
+                {/* بطاقة التمرين لو موجودة */}
                 {m.raw?.payload && <ExerciseCard payload={m.raw.payload} />}
               </div>
             </div>
