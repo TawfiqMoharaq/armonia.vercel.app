@@ -8,10 +8,11 @@ from typing import Dict, List, Optional
 from urllib.parse import quote_plus
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel, Field
+from starlette.responses import Response
 
 from .config import FRONTEND_ORIGIN, OPENAI_API_KEY, OPENAI_MODEL
 from .logic import analyze_selection
@@ -27,22 +28,27 @@ SYSTEM_PROMPT = (
 
 app = FastAPI(title="Armonia Coaching API")
 
+# ---------------------- CORS (مهم لحل مشكلة المتصفح) ---------------------- #
+# عدّل هذا إلى دومين الفرونت عندك على Vercel
+VERCEL_ORIGIN = "https://armonia-vercel-app-liart.vercel.app"
 
-def _parse_origins(origin_setting: str) -> List[str]:
-    if origin_setting.strip() == "*":
-        return ["*"]
-    return [origin.strip() for origin in origin_setting.split(",") if origin.strip()]
-
-
-origin_regex = r"https://.*vercel\.app$|http://localhost:5173"
+# Regex يسمح بأي سب دومين من vercel.app + localhost للتطوير
+origin_regex = r"^https://([a-z0-9-]+\.)*vercel\.app$|^http://localhost(:\d+)?$"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=origin_regex,
+    allow_origins=[VERCEL_ORIGIN],   # تصريح صريح لدومينك
+    allow_origin_regex=origin_regex, # ومعه Regex عام
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ✅ نضمن أن أي طلب OPTIONS (preflight) يرجع 204 مع هيدرز CORS
+@app.options("/{rest_of_path:path}")
+async def preflight(_: Request, rest_of_path: str) -> Response:
+    return Response(status_code=204)
+# -------------------------------------------------------------------------- #
 
 
 class Muscle(BaseModel):
@@ -168,6 +174,7 @@ async def health() -> Dict[str, object]:
         "status": "ok",
         "coaching": bool(OPENAI_API_KEY),
         "maps": list(BODY_MAP.keys()),
+        "frontend_origin": FRONTEND_ORIGIN,
     }
 
 
