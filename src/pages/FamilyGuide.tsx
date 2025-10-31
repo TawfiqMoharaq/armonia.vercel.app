@@ -111,8 +111,8 @@ const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
     }
 
     const earliest = matches.reduce((prev, current) =>
-      current.match.index < prev.match.index ? current : prev,
-    );
+      current!.match.index < prev!.match.index ? current! : prev!,
+    )!;
 
     if (earliest.match.index > 0) {
       pushPlain(remaining.slice(0, earliest.match.index));
@@ -159,6 +159,151 @@ const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
 
   return nodes.filter((node) => !(typeof node === "string" && node.length === 0));
 };
+
+/* ========================= الدالة الجديدة لعرض رد الشات ========================= */
+const renderChatReply = (text: string, fallbackKeywords?: string): ReactNode => {
+  // 1) جهّز السطور
+  const lines = text
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  type Section = { title: string; items: string[]; paras: string[] };
+  const sections: Section[] = [];
+  let current: Section | null = null;
+
+  // 2) كشف العناوين الشائعة (عربي/إنجليزي + Markdown)
+  const isHeading = (s: string) => {
+    const clean = stripBoldMarkers(s.replace(/^#+\s*/, "")).replace(/[.:：]+$/, "").trim();
+    return (
+      /^صباح/.test(clean) || /^مساء/.test(clean) ||
+      /^في المواقف/.test(clean) || /^إذا/.test(clean) ||
+      /^نصائح/.test(clean) || /^روابط/.test(clean) ||
+      /^(Power\s*Up|Cooldown|Routine)/i.test(clean) ||
+      /^###\s*/.test(s) || /^\*\*(.+)\*\*$/.test(s)
+    );
+  };
+
+  const normalizeTitle = (s: string) => {
+    const t = stripBoldMarkers(s.replace(/^#+\s*/, "")).replace(/[.:：]+$/, "").trim();
+    if (/Power\s*Up/i.test(t)) return "صباحًا (Power Up)";
+    if (/Cooldown/i.test(t) || /^تهدئة/.test(t) || /^مساء/.test(t)) return "مساءً (تهدئة)";
+    return t;
+  };
+
+  const iconClass = (title: string) => {
+    if (/^صباح/.test(title)) return { icon: "🚀", cls: "text-blue-600" };
+    if (/^مساء/.test(title)) return { icon: "🌙", cls: "text-purple-600" };
+    if (/^في المواقف/.test(title) || /^إذا/.test(title)) return { icon: "😣", cls: "text-orange-600" };
+    return { icon: "✨", cls: "text-[#0A6D8B]" };
+  };
+
+  const pushSection = () => {
+    if (current) sections.push(current);
+    current = null;
+  };
+
+  // 3) بناء الأقسام: عناوين / نقاط / فقرات
+  lines.forEach((line) => {
+    if (isHeading(line)) {
+      pushSection();
+      current = { title: normalizeTitle(line), items: [], paras: [] };
+      return;
+    }
+    if (/^[•\-]/.test(line)) {
+      current ??= { title: "توصيات", items: [], paras: [] };
+      current.items.push(stripBoldMarkers(line.replace(/^[•\-\s]+/, "")));
+      return;
+    }
+    current ??= { title: "توصيات", items: [], paras: [] };
+    current.paras.push(stripBoldMarkers(line));
+  });
+  pushSection();
+
+  // 4) رندر منسّق
+  return (
+    <div className="space-y-5">
+      {sections.map((sec, i) => {
+        const { icon, cls } = iconClass(sec.title);
+        return (
+          <div key={`sec-${i}`} className="space-y-2">
+            {/* عنوان القسم */}
+            <h3 className={`text-lg md:text-xl font-semibold ${cls}`}>
+              {icon} {sec.title}
+            </h3>
+
+            {/* فقرات */}
+            {sec.paras.map((p, idx) => {
+              // "عنوان: نص"
+              const colon = p.indexOf(":");
+              if (colon > 0 && colon < p.length - 1) {
+                const head = p.slice(0, colon).trim();
+                const body = p.slice(colon + 1).trim();
+                return (
+                  <p key={`p-${idx}`} className="text-[#4A5568] leading-relaxed">
+                    <span className="font-semibold text-[#0A6D8B]">
+                      {head}
+                      {body ? ":" : ""}
+                    </span>{" "}
+                    {body ? renderInline(body, fallbackKeywords) : null}
+                  </p>
+                );
+              }
+
+              // رابط يوتيوب خام → زر
+              if (/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(p)) {
+                return (
+                  <div key={`yt-${idx}`}>
+                    <a
+                      href={normalizeYoutubeLink(p, fallbackKeywords)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-block px-4 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7]"
+                    >
+                      🎧 فتح رابط يوتيوب
+                    </a>
+                  </div>
+                );
+              }
+
+              // نص حر
+              return (
+                <p key={`p-${idx}`} className="text-[#4A5568] leading-relaxed">
+                  {renderInline(p, fallbackKeywords)}
+                </p>
+              );
+            })}
+
+            {/* نقاط */}
+            {sec.items.length > 0 && (
+              <ul className="list-disc pr-5 space-y-1 text-[#4A5568]">
+                {sec.items.map((it, j) => (
+                  <li key={`li-${j}`}>{renderInline(it, fallbackKeywords)}</li>
+                ))}
+              </ul>
+            )}
+
+            {/* زر بحث يوتيوب تلقائي إذا ما فيه روابط */}
+            {!sec.paras.some((p) => /https?:\/\//.test(p)) &&
+              !sec.items.some((it) => /https?:\/\//.test(it)) && (
+                <div className="pt-1">
+                  <a
+                    href={toYoutubeSearchLink(fallbackKeywords || "موسيقى مريحة")}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-block px-4 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7]"
+                  >
+                    🎧 اقتراح: بحث يوتيوب مناسب
+                  </a>
+                </div>
+              )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+/* ======================= نهاية تعديل تنسيق ردود الشات ======================= */
 
 const FamilyGuide = () => {
   const navigate = useNavigate();
@@ -259,88 +404,6 @@ const FamilyGuide = () => {
       responses.light.trim().length > 0,
     [responses.light, responses.sound, responses.touch],
   );
-
-  const renderAnalysis = () => {
-    const lines = analysis
-      .split(/\n+/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-
-    const blocks: ReactNode[] = [];
-    let bulletBuffer: string[] = [];
-
-    const flushBullets = () => {
-      if (!bulletBuffer.length) return;
-      const listKey = `list-${blocks.length}`;
-      blocks.push(
-        <ul key={listKey} className="list-disc space-y-1 pr-5 text-right text-sm md:text-base">
-          {bulletBuffer.map((item, idx) => {
-            const cleaned = stripBoldMarkers(item.replace(/^[•\-\s]+/, ""));
-            const colonIndex = cleaned.indexOf(":");
-            if (colonIndex > 0) {
-              const heading = stripBoldMarkers(cleaned.slice(0, colonIndex).trim());
-              const body = stripBoldMarkers(cleaned.slice(colonIndex + 1).trim());
-              return (
-                <li key={`bullet-${idx}`} className="leading-relaxed text-[#4A5568]">
-                  <span className="font-semibold text-[#0A6D8B]">
-                    {heading}
-                    {body ? ":" : ""}
-                  </span>
-                  {body ? (
-                    <span className="mr-1">{renderInline(body, responses.activities)}</span>
-                  ) : null}
-                </li>
-              );
-            }
-            return (
-              <li key={`bullet-${idx}`} className="leading-relaxed text-[#4A5568]">
-                {renderInline(cleaned, responses.activities)}
-              </li>
-            );
-          })}
-        </ul>,
-      );
-      bulletBuffer = [];
-    };
-
-    lines.forEach((line) => {
-      if (/^[•\-]/.test(line)) {
-        bulletBuffer.push(line);
-        return;
-      }
-
-      flushBullets();
-
-      const colonIndex = line.indexOf(":");
-      if (colonIndex > 0) {
-        const heading = stripBoldMarkers(line.slice(0, colonIndex).trim());
-        const body = stripBoldMarkers(line.slice(colonIndex + 1).trim());
-        const blockKey = `block-${blocks.length}`;
-        blocks.push(
-          <p key={blockKey} className="text-[#4A5568] text-sm md:text-base leading-relaxed">
-            <span className="font-semibold text-[#0A6D8B]">
-              {heading}
-              {body ? ":" : ""}
-            </span>
-            {body ? (
-              <span className="mr-1">{renderInline(body, responses.activities)}</span>
-            ) : null}
-          </p>,
-        );
-        return;
-      }
-
-      const blockKey = `block-${blocks.length}`;
-      blocks.push(
-        <p key={blockKey} className="text-[#4A5568] text-sm md:text-base leading-relaxed">
-          {renderInline(stripBoldMarkers(line), responses.activities)}
-        </p>,
-      );
-    });
-
-    flushBullets();
-    return blocks;
-  };
 
   return (
     <div
@@ -461,7 +524,7 @@ const FamilyGuide = () => {
           )}
 
           <div className="bg-[#F7FAFC] border border-[#E2E8F0] rounded-lg p-5 space-y-2 text-right text-sm md:text-base">
-            {renderAnalysis()}
+            {renderChatReply(analysis, responses.activities)}
           </div>
 
           <div className="flex flex-col sm:flex-row justify-center gap-4">
