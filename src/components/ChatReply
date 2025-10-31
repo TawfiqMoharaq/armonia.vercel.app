@@ -1,0 +1,106 @@
+// src/components/ChatReply.tsx
+import React from "react";
+import {
+  parseReply,
+  renderInline,
+  normalizeYoutubeLink,
+  toYoutubeSearchLink,
+  iconAndClass,
+} from "../lib/chatFormat";
+
+type Props = {
+  text: string;
+  fallbackKeywords?: string;   // مثال: اسم العضلة، أو activities من نموذج الأسرة
+  card?: boolean;              // لو true يجي داخل كارد
+};
+
+export default function ChatReply({ text, fallbackKeywords, card = false }: Props) {
+  const sections = parseReply(text);
+
+  const Inner = (
+    <div className="space-y-5">
+      {sections.map((sec, i) => {
+        const { icon, cls } = iconAndClass(sec.title);
+        return (
+          <section key={`sec-${i}`} className="space-y-2">
+            <h3 className={`text-lg md:text-xl font-semibold ${cls}`}>
+              {icon} {sec.title}
+            </h3>
+
+            {sec.paras.map((p, idx) => {
+              const colon = p.indexOf(":");
+              if (colon > 0 && colon < p.length - 1) {
+                const head = p.slice(0, colon).trim();
+                const body = p.slice(colon + 1).trim();
+                return (
+                  <p key={`p-${idx}`} className="text-[#4A5568] leading-relaxed">
+                    <span className="font-semibold text-[#0A6D8B]">
+                      {head}
+                      {body ? ":" : ""}
+                    </span>{" "}
+                    {body ? renderInline(body, fallbackKeywords) : null}
+                  </p>
+                );
+              }
+
+              // رابط خام → زر
+              if (/^https?:\/\/\S+/i.test(p)) {
+                const url = normalizeYoutubeLink(p, fallbackKeywords);
+                const isYT = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url);
+                return (
+                  <div key={`url-${idx}`}>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-block px-4 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7]"
+                    >
+                      {isYT ? "🎧 فتح رابط يوتيوب" : "🔗 فتح الرابط"}
+                    </a>
+                  </div>
+                );
+              }
+
+              return (
+                <p key={`p-${idx}`} className="text-[#4A5568] leading-relaxed">
+                  {renderInline(p, fallbackKeywords)}
+                </p>
+              );
+            })}
+
+            {sec.items.length > 0 && (
+              <ul className="list-disc pr-5 space-y-1 text-[#4A5568]">
+                {sec.items.map((it, j) => (
+                  <li key={`li-${j}`}>{renderInline(it, fallbackKeywords)}</li>
+                ))}
+              </ul>
+            )}
+
+            {/* زر بحث يوتيوب إذا ما وُجدت روابط */}
+            {!sec.paras.some((p) => /https?:\/\//.test(p)) &&
+              !sec.items.some((it) => /https?:\/\//.test(it)) && (
+                <div className="pt-1">
+                  <a
+                    href={toYoutubeSearchLink(fallbackKeywords || "موسيقى مريحة")}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-block px-4 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7]"
+                  >
+                    🎧 اقتراح: بحث يوتيوب مناسب
+                  </a>
+                </div>
+              )}
+          </section>
+        );
+      })}
+    </div>
+  );
+
+  if (!card) return Inner;
+
+  return (
+    <div className="bg-[#F7FAFC] border border-[#E2E8F0] rounded-lg p-5 text-right text-sm md:text-base">
+      {Inner}
+    </div>
+  );
+}
