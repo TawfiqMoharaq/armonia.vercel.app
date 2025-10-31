@@ -84,10 +84,10 @@ export default function ExerciseCoach({ coachType = "squat" }: Props) {
         }
         await tf.ready();
 
-        const detector = await poseDetection.createDetector(
-          poseDetection.SupportedModels.MoveNet,
+       const detector = await posedetection.createDetector(
+          posedetection.SupportedModels.MoveNet,
           {
-            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+            modelType: posedetection.movenet.modelType.SINGLEPOSE_LIGHTNING, // ✅
             enableSmoothing: true,
           }
         );
