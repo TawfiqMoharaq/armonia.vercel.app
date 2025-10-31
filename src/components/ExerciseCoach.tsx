@@ -1,227 +1,292 @@
 import React, { useEffect, useRef, useState } from "react";
-import * as posedetection from "@tensorflow-models/pose-detection";
-import "@tensorflow/tfjs-backend-webgl";
-import * as tf from "@tensorflow/tfjs-core";
-import type { Keypoint } from "@tensorflow-models/pose-detection";
+import {
+  DrawingUtils,
+  FilesetResolver,
+  PoseLandmarker,
+  type NormalizedLandmark,
+} from "@mediapipe/tasks-vision";
 
-type CoachKind = "squat" | "none";
+// ✅ نحاول عدة نماذج تلقائياً (لتجنب 404 أو عدم دعم float16)
+const MODEL_CANDIDATES = [
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float32/latest/pose_landmarker_lite.task",
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float32/latest/pose_landmarker_full.task",
+];
+
+// ✅ إصدار ثابت للـ WASM (لا تستخدم rc)
+const WASM_BASE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm";
 
 const KNEE_UP_THRESHOLD = 160;
 const KNEE_DOWN_MIN = 70;
 const KNEE_DOWN_MAX = 100;
 const BACK_SAFE_THRESHOLD = 150;
 
-function toDeg(v: number) { return (v * 180) / Math.PI; }
+type AngleSample = { knee: number; back: number };
 
-function angle(a?: Keypoint, c?: Keypoint, b?: Keypoint) {
-  if (!a || !b || !c) return null;
-  const v1 = [a.x - c.x, a.y - c.y], v2 = [b.x - c.x, b.y - c.y];
-  const dot = v1[0]*v2[0] + v1[1]*v2[1];
-  const m1 = Math.hypot(v1[0], v1[1]), m2 = Math.hypot(v2[0], v2[1]);
+function toDeg(r: number) { return (r * 180) / Math.PI; }
+function vectorAngle(a: NormalizedLandmark, c: NormalizedLandmark, b: NormalizedLandmark) {
+  const v1 = [a.x - c.x, a.y - c.y, a.z - c.z];
+  const v2 = [b.x - c.x, b.y - c.y, b.z - c.z];
+  const dot = v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2];
+  const m1 = Math.hypot(v1[0], v1[1], v1[2]);
+  const m2 = Math.hypot(v2[0], v2[1], v2[2]);
   if (!m1 || !m2) return null;
-  const cosine = Math.min(Math.max(dot / (m1*m2), -1), 1);
-  return toDeg(Math.acos(cosine));
+  const cos = Math.min(Math.max(dot / (m1 * m2), -1), 1);
+  return toDeg(Math.acos(cos));
+}
+function pickLeg(lms: NormalizedLandmark[]) {
+  const L = { shoulder: 11, hip: 23, knee: 25, ankle: 27 };
+  const R = { shoulder: 12, hip: 24, knee: 26, ankle: 28 };
+  const score = (s: typeof L) => [s.hip, s.knee, s.ankle].reduce((t,i)=>t+(lms[i]?.visibility??0),0);
+  return score(L) >= score(R) ? L : R;
+}
+function clampInt(v: number | null) { return v==null||Number.isNaN(v)?null:Math.round(v); }
+
+// ====== كاميرا: محاولات مرنة + رسائل واضحة ======
+async function getCameraStream(): Promise<MediaStream> {
+  const trials: MediaStreamConstraints[] = [
+    { video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } } },
+    { video: { width: { ideal: 960 }, height: { ideal: 720 } } },
+    { video: true },
+  ];
+  let lastErr: any;
+  for (const c of trials) {
+    try { return await navigator.mediaDevices.getUserMedia(c); }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+function explainGetUserMediaError(err: any): string {
+  const n = err?.name || "";
+  switch (n) {
+    case "NotAllowedError":
+    case "PermissionDeniedError": return "تم رفض إذن الكاميرا. اسمح بالوصول من شريط العنوان ثم أعد المحاولة.";
+    case "NotFoundError":
+    case "DevicesNotFoundError": return "لم يتم العثور على كاميرا. تأكد من توصيل الكاميرا أو اختيار الجهاز الصحيح.";
+    case "NotReadableError":
+    case "TrackStartError": return "لا يمكن فتح الكاميرا (قد تكون مستخدمة من تطبيق آخر). أغلق التطبيقات الأخرى ثم جرّب.";
+    case "OverconstrainedError": return "إعدادات الكاميرا غير مدعومة على هذا الجهاز. تم تقليل المتطلبات، حدّث الصفحة.";
+    case "SecurityError": return "الوصول للكاميرا يتطلب اتصالاً آمناً (HTTPS).";
+    case "AbortError": return "تعذر بدء تشغيل الكاميرا بسبب خطأ داخلي.";
+    default: return `تعذر تشغيل الكاميرا: ${n || "خطأ غير متوقع"}`;
+  }
 }
 
-function byName(kps: Keypoint[], name: string) {
-  return kps.find((k) => (k as any).name === name);
-}
-
-function pickLeg(kps: Keypoint[]) {
-  const left = {
-    shoulder: byName(kps, "left_shoulder"),
-    hip:      byName(kps, "left_hip"),
-    knee:     byName(kps, "left_knee"),
-    ankle:    byName(kps, "left_ankle"),
-  };
-  const right = {
-    shoulder: byName(kps, "right_shoulder"),
-    hip:      byName(kps, "right_hip"),
-    knee:     byName(kps, "right_knee"),
-    ankle:    byName(kps, "right_ankle"),
-  };
-  const score = (p?: Keypoint) => p?.score ?? 0;
-  const l = score(left.hip)+score(left.knee)+score(left.ankle);
-  const r = score(right.hip)+score(right.knee)+score(right.ankle);
-  return l >= r ? left : right;
-}
-
-type Props = { coachType?: CoachKind };
-
-export default function ExerciseCoach({ coachType = "squat" }: Props) {
+export default function ExerciseCoach() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const poseRef = useRef<PoseLandmarker | null>(null);
+  const rafRef = useRef<number>();
+  const wasDownRef = useRef(false);
+  const lastSampleRef = useRef<AngleSample>({ knee: -1, back: -1 });
 
+  const [initializing, setInitializing] = useState(true);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const [repCount, setRepCount] = useState(0);
   const [kneeAngle, setKneeAngle] = useState<number | null>(null);
   const [backAngle, setBackAngle] = useState<number | null>(null);
   const [backWarning, setBackWarning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const wasDownRef = useRef(false);
-  const rafRef = useRef<number | null>(null);
-  const detectorRef = useRef<posedetection.PoseDetector | null>(null);
 
   useEffect(() => {
     let active = true;
-    let syncHandler: (() => void) | null = null;
+    const abortController = new AbortController();
 
-    const init = async () => {
-      try {
-        setError(null);
-        setRepCount(0);
-        setKneeAngle(null);
-        setBackAngle(null);
-        setBackWarning(false);
-
-        if (tf.getBackend() !== "webgl") await tf.setBackend("webgl");
-        await tf.ready();
-
-        const detector = await posedetection.createDetector(
-          posedetection.SupportedModels.MoveNet,
-          {
-            modelType: posedetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
-            enableSmoothing: true,
+    // ✅ جرّب GPU ثم CPU + كل الموديلات بالترتيب
+    async function createLandmarker(fileset: any) {
+      let lastErr: any;
+      for (const delegate of ["GPU", "CPU"] as const) {
+        for (const url of MODEL_CANDIDATES) {
+          try {
+            const lm = await PoseLandmarker.createFromOptions(fileset, {
+              baseOptions: { modelAssetPath: url },
+              delegate,
+              runningMode: "VIDEO",
+              numPoses: 1,
+            });
+            console.info("[PoseLandmarker] loaded:", delegate, url);
+            return lm;
+          } catch (e) {
+            lastErr = e;
+            console.warn("[PoseLandmarker] failed:", delegate, url, e);
           }
-        );
-        detectorRef.current = detector;
+        }
+      }
+      throw lastErr ?? new Error("Failed to load any PoseLandmarker model.");
+    }
 
-        if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error("متصفحك لا يدعم الوصول إلى الكاميرا.");
+    const initialize = async () => {
+      try {
+        // ✅ فحص السياق الآمن ودعم الكاميرا قبل أي طلب
+        if (!("mediaDevices" in navigator) || !navigator.mediaDevices.getUserMedia) {
+          setCameraError("المتصفح لا يدعم getUserMedia. حدّث المتصفح أو جرّب Chrome/Edge.");
+          setInitializing(false);
+          return;
+        }
+        if (!window.isSecureContext) {
+          setCameraError("هذه الصفحة ليست آمنة (HTTPS مطلوب). استخدم https أو localhost.");
+          setInitializing(false);
+          return;
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
-          audio: false,
-        });
+        // WASM ثم الموديل
+        const fileset = await FilesetResolver.forVisionTasks(WASM_BASE_URL);
+        if (!active) return;
 
-        const video = videoRef.current, canvas = canvasRef.current;
-        if (!video || !canvas) throw new Error("تعذر العثور على عناصر الفيديو أو اللوحة.");
+        poseRef.current = await createLandmarker(fileset);
+        if (!active) return;
+
+        // الكاميرا مع محاولات fallback
+        let stream: MediaStream;
+        try { stream = await getCameraStream(); }
+        catch (e) {
+          setCameraError(explainGetUserMediaError(e));
+          setInitializing(false);
+          return;
+        }
+        if (!active) { stream.getTracks().forEach(t=>t.stop()); return; }
+
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!video || !canvas) {
+          stream.getTracks().forEach((t)=>t.stop());
+          setCameraError("تعذر تهيئة مكونات العرض. أعد تحميل الصفحة.");
+          return;
+        }
 
         video.srcObject = stream;
-        await video.play();
+        try { await video.play(); } catch { /* بعض المتصفحات تمنع autoplay */ }
 
         const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("تعذر الحصول على سياق الرسم الثنائية الأبعاد.");
+        if (!ctx) { setCameraError("Canvas context غير متاح."); return; }
 
-        const sync = () => {
-          if (!video) return;
-          canvas.width = video.videoWidth || canvas.width;
-          canvas.height = video.videoHeight || canvas.height;
+        const drawingUtils = new DrawingUtils(ctx);
+
+        const syncCanvasSize = () => {
+          if (!video.videoWidth || !video.videoHeight) return;
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
         };
-        syncHandler = sync;
-        sync();
-        video.addEventListener("loadedmetadata", sync);
-        video.addEventListener("resize", sync);
+        syncCanvasSize();
+        video.addEventListener("loadedmetadata", syncCanvasSize, { signal: abortController.signal });
+        video.addEventListener("resize", syncCanvasSize, { signal: abortController.signal });
 
-        const loop = async () => {
-          if (!active) return;
-          const det = detectorRef.current;
-          if (!det) { rafRef.current = requestAnimationFrame(loop); return; }
+        setInitializing(false);
 
-          const poses = await det.estimatePoses(video, { flipHorizontal: true });
-
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-          if (poses[0]?.keypoints?.length) {
-            const kps = poses[0].keypoints as Keypoint[];
-
-            ctx.fillStyle = "#18A4B8";
-            for (const kp of kps) if ((kp.score ?? 0) > 0.5)
-              ctx.fillRect(kp.x - 2, kp.y - 2, 4, 4);
-
-            if (coachType === "squat") {
-              const leg = pickLeg(kps);
-              const kAng = angle(leg.hip, leg.knee, leg.ankle);
-              const bAng = angle(leg.shoulder, leg.hip, leg.knee);
-
-              if (kAng != null) {
-                const val = Math.round(kAng);
-                setKneeAngle(val);
-                if (val >= KNEE_DOWN_MIN && val <= KNEE_DOWN_MAX) wasDownRef.current = true;
-                if (val >= KNEE_UP_THRESHOLD && wasDownRef.current) {
-                  wasDownRef.current = false;
-                  setRepCount((c) => c + 1);
-                }
-              }
-
-              if (bAng != null) {
-                const val = Math.round(bAng);
-                setBackAngle(val);
-                setBackWarning(val < BACK_SAFE_THRESHOLD);
-              } else setBackWarning(false);
+        const processAngles = (kneeValue: number | null, backValue: number | null) => {
+          if (kneeValue != null) {
+            const r = clampInt(kneeValue);
+            if (r != null) {
+              const prev = lastSampleRef.current.knee;
+              if (Math.abs(prev - r) >= 1) setKneeAngle(r);
+              lastSampleRef.current.knee = r;
+            }
+            if (kneeValue >= KNEE_DOWN_MIN && kneeValue <= KNEE_DOWN_MAX) wasDownRef.current = true;
+            if (kneeValue >= KNEE_UP_THRESHOLD && wasDownRef.current) {
+              wasDownRef.current = false;
+              setRepCount((c) => c + 1);
             }
           }
-
-          rafRef.current = requestAnimationFrame(loop);
+          if (backValue != null) {
+            const r = clampInt(backValue);
+            if (r != null) {
+              const prev = lastSampleRef.current.back;
+              if (Math.abs(prev - r) >= 1) setBackAngle(r);
+              lastSampleRef.current.back = r;
+            }
+            setBackWarning(backValue < BACK_SAFE_THRESHOLD);
+          } else {
+            setBackWarning(false);
+          }
         };
 
-        loop();
-      } catch (e: any) {
-        const name = e?.name ?? "";
-        if (name === "NotAllowedError") {
-          setError("تم رفض صلاحية الكاميرا. يرجى السماح بالوصول من إعدادات المتصفح.");
-        } else if (e?.message) {
-          setError(e.message);
-        } else {
-          setError("حدث خطأ أثناء تهيئة مدرب التمرين.");
-        }
+        const renderLoop = () => {
+          if (!poseRef.current || !videoRef.current || videoRef.current.readyState < 2) {
+            rafRef.current = requestAnimationFrame(renderLoop);
+            return;
+          }
+          const nowInMs = performance.now();
+          const result = poseRef.current.detectForVideo(videoRef.current, nowInMs);
+
+          ctx.save();
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          if (result.landmarks.length) {
+            const [landmarks] = result.landmarks;
+            drawingUtils.drawLandmarks(landmarks, {
+              radius: 4,
+              visibilityMin: 0.65,
+              fillColor: "#18A4B8",
+            });
+
+            const leg = pickLeg(landmarks);
+            const hip = landmarks[leg.hip];
+            const knee = landmarks[leg.knee];
+            const ankle = landmarks[leg.ankle];
+            const shoulder = landmarks[leg.shoulder];
+
+            let k: number | null = null;
+            let b: number | null = null;
+            if (hip && knee && ankle) k = vectorAngle(hip, knee, ankle);
+            if (shoulder && hip && knee) b = vectorAngle(shoulder, hip, knee);
+
+            processAngles(k, b);
+          }
+
+          ctx.restore();
+          rafRef.current = requestAnimationFrame(renderLoop);
+        };
+
+        renderLoop();
+      } catch (error: any) {
+        console.error("[ExerciseCoach] initialize() failed:", error);
+        setCameraError(error?.message ?? "تعذر بدء تشغيل المدرب.");
+        setInitializing(false);
       }
     };
 
-    init();
+    initialize();
 
     return () => {
       active = false;
-      if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      abortController.abort();
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
       const video = videoRef.current;
-      if (video) {
-        if (syncHandler) {
-          video.removeEventListener("loadedmetadata", syncHandler);
-          video.removeEventListener("resize", syncHandler);
-        }
-        const s = video.srcObject as MediaStream | null;
-        s?.getTracks().forEach((t) => t.stop());
-        video.pause();
-        video.srcObject = null;
-      }
-      detectorRef.current?.dispose?.();
-      detectorRef.current = null;
+      if (video?.srcObject) (video.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+      poseRef.current?.close();
     };
-  }, [coachType]);
+  }, []);
 
   return (
     <div className="relative w-full aspect-video rounded-3xl overflow-hidden border border-white/20 bg-black shadow">
       <video ref={videoRef} className="hidden" playsInline muted />
       <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-      {coachType === "squat" && (
-        <div className="absolute top-4 left-4 space-y-2 text-white text-sm">
-          <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
-            <span className="font-semibold text-lg">{repCount}</span>
-            <span>تكرارات</span>
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
-              زاوية الركبة: {kneeAngle ?? "--"} درجة
-            </span>
-            <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
-              زاوية الظهر: {backAngle ?? "--"} درجة
-            </span>
-          </div>
+      <div className="absolute top-4 left-4 space-y-2 text-white text-sm">
+        <div className="px-3 py-2 rounded-2xl bg-black/60 backdrop-blur flex items-center gap-3">
+          <span className="font-semibold text-lg">{repCount}</span>
+          <span>Reps</span>
         </div>
-      )}
+        <div className="flex flex-col gap-1">
+          <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
+            Knee angle: {kneeAngle ?? "—"}°
+          </span>
+          <span className="px-3 py-1 rounded-xl bg-black/60 backdrop-blur">
+            Back angle: {backAngle ?? "—"}°
+          </span>
+        </div>
+      </div>
 
-      {error && (
+      {(initializing || cameraError) && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-center px-6">
-          <p className="text-sm leading-relaxed" dir="rtl">{error}</p>
+          <p className="text-sm leading-relaxed" dir="rtl">
+            {cameraError ?? "جاري تشغيل الكاميرا ومدرب الوضعيات...\nاسمح بإذن الكاميرا وابقَ ثابتاً."}
+          </p>
         </div>
       )}
 
-      {backWarning && !error && (
+      {backWarning && !cameraError && !initializing && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-2xl bg-red-600/85 text-white font-semibold shadow-lg">
-          حافظ على استقامة ظهرك!
+          Keep your chest up and maintain a neutral spine!
         </div>
       )}
     </div>
