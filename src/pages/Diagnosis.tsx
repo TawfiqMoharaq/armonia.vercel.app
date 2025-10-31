@@ -403,5 +403,3 @@ export default function Diagnosis() {
     </div>
   );
 }
-
-ذا الكود حقي عدل عليه
