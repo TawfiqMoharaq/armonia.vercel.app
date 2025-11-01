@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sendChat, type ChatPayload, type ChatResponse, type MuscleContext } from "../lib/api";
 import ChatMessageView from "./ChatMessageView";
+// 👇 إضافة دالة تنظيف روابط يوتيوب
+import { stripAllYoutubeLinks } from "../lib/chatFormat";
 
 type ChatRole = "user" | "assistant";
 interface ChatMessage { id: string; role: ChatRole; content: string; youtube?: string; error?: boolean; }
@@ -165,10 +167,13 @@ export default function ChatBox({
         localStorage.setItem(storageKey, response.session_id);
 
         const youtubeLink = response.youtube && response.youtube.startsWith("http") ? response.youtube : yt;
-        const replyText = response.reply ?? "";
+        const replyTextRaw = response.reply ?? "";
 
-        const suggested = extractSuggestedExercise(replyText);
+        const suggested = extractSuggestedExercise(replyTextRaw);
         if (suggested && onSuggestedExercise) onSuggestedExercise(suggested);
+
+        // 👇 نظّف كل روابط يوتيوب من نص المساعد (نخلي رابط واحد فقط خارجياً)
+        const replyText = stripAllYoutubeLinks(replyTextRaw);
 
         setMessages((prev) => [...prev, { id: createId(), role: "assistant", content: replyText, youtube: youtubeLink }]);
       } catch (error: any) {
