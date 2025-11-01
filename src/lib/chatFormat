@@ -1,11 +1,11 @@
-// src/lib/chatFormat.ts
 import type { ReactNode } from "react";
 
+/* ---------------------- أدوات بسيطة للنصوص والروابط ---------------------- */
 export const stripBoldMarkers = (text: string) =>
   text.replace(/\*\*(.+?)\*\*/g, "$1").trim();
 
 export const toYoutubeSearchLink = (keywords?: string) => {
-  const base = (keywords?.trim() && keywords.trim()) || "family sensory routine tips";
+  const base = (keywords?.trim() && keywords.trim()) || "sensory family routine tips";
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(base)}`;
 };
 
@@ -72,7 +72,7 @@ export const renderInline = (text: string, fallbackKeywords?: string): ReactNode
       current!.match.index < prev!.match.index ? current! : prev!,
     )!;
 
-    if (earliest.match.index > 0) pushPlain(remaining.slice(0, earliest.match.index));
+    if (earliest.match.index > 0) pushPlain(remaining.slice(earliest.match.index));
 
     const [full, first, second] = earliest.match;
 
@@ -115,10 +115,10 @@ export const renderInline = (text: string, fallbackKeywords?: string): ReactNode
   return nodes.filter((node) => !(typeof node === "string" && node.length === 0));
 };
 
-// ====== Parser مرن لا يعتمد على البرمبت ======
+/* ------------------------- Parser مرن للأقسام ------------------------- */
 export type ParsedSection = { title: string; paras: string[]; items: string[] };
 
-const bulletRegex = /^([•\-–—]|\d+[.)\-،]|[\u0660-\u0669]+[.)\-،])\s*/; // يدعم أرقام عربية
+const bulletRegex = /^([•\-–—]|\d+[.)\-،]|[\u0660-\u0669]+[.)\-،])\s*/; // يدعم الأرقام العربية
 
 const isHeading = (s: string) => {
   const clean = stripBoldMarkers(s.replace(/^#+\s*/, "")).replace(/[.:：]+$/, "").trim();
@@ -153,21 +153,22 @@ export function parseReply(text: string): ParsedSection[] {
       return;
     }
     if (bulletRegex.test(line)) {
-      current ??= { title: "توصيات", paras: [], items: [] };
+      current ??= { title: "توصيات للأسرة", paras: [], items: [] };
       current.items.push(stripBoldMarkers(line.replace(bulletRegex, "")));
       return;
     }
-    current ??= { title: "توصيات", paras: [], items: [] };
+    current ??= { title: "توصيات للأسرة", paras: [], items: [] };
     current.paras.push(stripBoldMarkers(line));
   });
 
   push();
-  return sections.length ? sections : [{ title: "توصيات", paras: lines, items: [] }];
+  return sections.length ? sections : [{ title: "توصيات للأسرة", paras: lines, items: [] }];
 }
 
-export const iconAndClass = (title: string) => {
-  if (/^صباح/.test(title)) return { icon: "🚀", cls: "text-blue-600" };
-  if (/^مساء/.test(title) || /^تهدئة/.test(title)) return { icon: "🌙", cls: "text-purple-600" };
-  if (/^في المواقف/.test(title) || /^إذا/.test(title)) return { icon: "😣", cls: "text-orange-600" };
-  return { icon: "✨", cls: "text-[#0A6D8B]" };
+/* -------------------- تلوين العناوين (بدون أيقونات) -------------------- */
+export const colorClassForTitle = (title: string) => {
+  if (/^صباح/.test(title)) return "text-[#0A6D8B]";      // أزرق أرمونيا
+  if (/^مساء/.test(title) || /^تهدئة/.test(title)) return "text-purple-600";
+  if (/^في المواقف/.test(title) || /^إذا/.test(title)) return "text-orange-600";
+  return "text-[#0A6D8B]";
 };
