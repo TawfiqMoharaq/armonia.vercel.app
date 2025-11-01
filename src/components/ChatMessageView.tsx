@@ -1,11 +1,8 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
-import { cleanModelText } from "@/utils/formatChat";
+import { cleanModelText } from "../utils/formatChat";
 
-type Props = {
-  text: string;       // نص خام من الـAPI
-  youtube?: string;   // رابط يوتيوب (اختياري)
-};
+type Props = { text: string; youtube?: string };
 
 export default function ChatMessageView({ text, youtube }: Props) {
   const pretty = cleanModelText(text);
@@ -13,7 +10,6 @@ export default function ChatMessageView({ text, youtube }: Props) {
   return (
     <div className="rounded-2xl px-4 py-3 bg-white/70 shadow-sm border border-slate-200">
       <ReactMarkdown
-        // منع كتل الكود من الظهور — نعرض فقط نص عادي
         components={{
           code: ({ children, inline, ...props }) =>
             inline ? (
