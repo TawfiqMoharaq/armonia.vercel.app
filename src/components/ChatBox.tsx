@@ -18,7 +18,8 @@ interface ChatBoxProps {
   autoStartAdvice?: boolean;
   autoStartPrompt?: string;
   sessionKey?: string;
-  onSuggestedExercise?: (name: string) => void; // لو الشات سمّى تمرين
+  /** يُستدعى عندما يذكر الرد اسم تمرين */
+  onSuggestedExercise?: (name: string) => void;
 }
 
 /* ===================== نصوص ثابتة ===================== */
@@ -33,12 +34,13 @@ const TYPING_LABEL = "...يكتب";
 const EMPTY_STATE_TEXT = "ابدأ الحوار بسؤال عن تمارين العضلة أو اطلب خطة سريعة، والمدرب بيجاوبك.";
 const INPUT_PLACEHOLDER = "اكتب سؤالك هنا...";
 const SEND_LABEL = "إرسال";
-const LINK_EMOJI = "🔗";
 
 const ERROR_MESSAGE_GENERIC = "تعذر الاتصال بالخدمة الآن. هذا فيديو مقترح حسب العضلة المختارة:";
 const ERROR_MESSAGE_TIMEOUT = "انتهت مهلة الانتظار للرد. هذا فيديو مقترح حسب العضلة المختارة:";
 
 /* ===================== مساعدات ===================== */
+const LINK_EMOJI = "🔗";
+
 const createId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -72,7 +74,7 @@ const linkifyText = (text: string): ReactNode[] => {
         href={match}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-[#0A6D8B] underline decoration-dotted underline-offset-4"
+        className="text-teal-700 underline decoration-dotted underline-offset-4 hover:text-teal-800"
       >
         {match}
       </a>
@@ -104,8 +106,8 @@ const renderWithLinks = (content: string) => {
           const title = colonIndex >= 0 ? cleaned.slice(0, colonIndex) : cleaned;
           const body = colonIndex >= 0 ? cleaned.slice(colonIndex + 1).trim() : "";
           return (
-            <li key={`li-${idx}`} className="text-sm leading-relaxed text-gray-800">
-              <span className="font-semibold text-[#0A6D8B]">{title}</span>
+            <li key={`li-${idx}`} className="text-[15px] leading-7 text-slate-800">
+              <span className="font-semibold text-teal-700">{title}</span>
               {body ? <span className="ml-1">{linkifyText(body)}</span> : null}
             </li>
           );
@@ -126,15 +128,15 @@ const renderWithLinks = (content: string) => {
       const heading = line.slice(0, colonIndex).trim();
       const rest = line.slice(colonIndex + 1).trim();
       blocks.push(
-        <p key={`h-${blocks.length}`} className="leading-relaxed text-gray-800 text-sm">
-          <span className="font-semibold text-[#0A6D8B]">{heading}:</span>{" "}
+        <p key={`h-${blocks.length}`} className="leading-7 text-slate-800 text-[15px]">
+          <span className="font-semibold text-teal-700">{heading}:</span>{" "}
           <span>{linkifyText(rest)}</span>
         </p>
       );
       return;
     }
     blocks.push(
-      <p key={`p-${blocks.length}`} className="leading-relaxed text-gray-800 text-sm">
+      <p key={`p-${blocks.length}`} className="leading-7 text-slate-800 text-[15px]">
         {linkifyText(line)}
       </p>
     );
@@ -259,7 +261,7 @@ export default function ChatBox({
     if (stored) setSessionId(stored);
   }, [storageKey]);
 
-  // تصفير الجلسة عند تغيّر السياق
+  // تصفير الجلسة عند تغيّر السياق (مع وجود عضلات)
   useEffect(() => {
     if (!musclesContext || musclesContext.length === 0) return;
     setMessages([]);
@@ -348,27 +350,29 @@ export default function ChatBox({
   }, [messages]);
 
   return (
-    <section className="bg-white border rounded-xl shadow px-5 py-6 space-y-4">
+    <section className="bg-white/90 backdrop-blur border border-slate-200 rounded-2xl shadow-md px-6 py-6 space-y-5">
       <header>
         <h2 className="text-xl font-semibold text-[#0A6D8B]" dir="rtl">
           {HEADER_TITLE}
         </h2>
-        <p className="text-sm text-gray-500 mt-1" dir="rtl">
+        <p className="text-sm text-slate-500 mt-1" dir="rtl">
           {HEADER_SUBTITLE}
         </p>
       </header>
 
-      <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1 flex flex-col" dir="rtl">
+      <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1 flex flex-col scroll-smooth" dir="rtl">
         {visibleMessages.map((message) => {
+          // تنظيف العرض فقط للمساعد
           const display =
             message.role === "assistant" ? stripJsonForDisplay(message.content).trim() : message.content;
+
           return (
             <div
               key={message.id}
-              className={`rounded-lg px-4 py-3 text-sm leading-relaxed ${
+              className={`rounded-2xl px-4 py-3 text-[15px] leading-7 shadow-sm ${
                 message.role === "user"
-                  ? "bg-[#E8F5F9] text-[#0A6D8B] self-end text-right"
-                  : "bg-[#F8FAFC] text-gray-800"
+                  ? "bg-teal-50 text-teal-900 self-end text-right border border-teal-100"
+                  : "bg-slate-50 text-slate-800 border border-slate-100"
               }`}
             >
               {renderWithLinks(display)}
@@ -378,7 +382,7 @@ export default function ChatBox({
                     href={message.youtube}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 text-sm text-[#0A6D8B] font-medium"
+                    className="inline-flex items-center gap-2 text-sm text-teal-700 font-medium hover:text-teal-800"
                   >
                     <span role="img" aria-label="youtube link">
                       {LINK_EMOJI}
@@ -409,11 +413,11 @@ export default function ChatBox({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={INPUT_PLACEHOLDER}
-          className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#0A6D8B]"
+          className="flex-1 rounded-xl border border-slate-300 px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-teal-500/60"
         />
         <button
           type="submit"
-          className="bg-gradient-to-r from-[#0A6D8B] to-[#18A4B8] text-white px-5 py-2 rounded-lg disabled:opacity-60"
+          className="rounded-xl px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-medium transition disabled:opacity-60"
           disabled={!input.trim() || isTyping}
         >
           {SEND_LABEL}
