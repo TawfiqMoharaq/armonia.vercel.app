@@ -1,4 +1,3 @@
-// src/lib/chatFormat.ts
 import type { ReactNode } from "react";
 
 /* ---------------------- أدوات بسيطة للنصوص والروابط ---------------------- */
@@ -23,6 +22,20 @@ export const normalizeYoutubeLink = (url: string, fallbackKeywords?: string) => 
     return toYoutubeSearchLink(fallbackKeywords);
   }
   return url;
+};
+
+/** يحذف أي روابط يوتيوب من النص (روابط مباشرة أو Markdown). */
+export const stripAllYoutubeLinks = (text: string): string => {
+  if (!text) return text;
+  // احذف روابط Markdown ليوتيوب: [title](https://youtube...)
+  text = text.replace(
+    /\[([^\]]+)\]\((https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s)]+)\)/gi,
+    "$1"
+  );
+  // احذف الروابط المباشرة ليوتيوب
+  text = text.replace(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/\S+/gi, "");
+  // نظّف الفراغات
+  return text.replace(/\n{3,}/g, "\n\n").trim();
 };
 
 export const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
