@@ -20,21 +20,10 @@ from .muscle_data import BODY_MAP, BodySideKey
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY_MESSAGES = 24
-
-# -------------------- برمبتات مفصولة للخدمات --------------------
-COACH_PROMPT = (
+SYSTEM_PROMPT = (
     "أنت مدرب لياقة افتراضي يتكلم بلهجة سعودية بسيطة. حافظ على الإرشادات عملية وواضحة بدون تشخيص طبي. "
     "ذكّر المستخدم دائماً بالسلامة، الإحماء، والتوقف إذا زاد الألم. لا تكرر نفس الجمل وقدّم خطوات مختصرة وواضحة."
 )
-
-FAMILY_PROMPT = (
-    "أنت مرشد أسري يتكلم بلهجة سعودية مريحة. هدفك مساعدة الأسرة على التعامل اليومي مع الطفل "
-    "من خلال روتين بسيط، تنظيم البيئة الحسية، أدوات تواصل بديلة، وتعزيز السلوك الإيجابي. "
-    "قدّم نصائح عملية قصيرة ومباشرة للعائلة، وتجنب أي تشخيص طبي. لا تكرر الجمل."
-)
-
-# للإبقاء على التوافق مع الشيفرة القديمة
-SYSTEM_PROMPT = COACH_PROMPT
 
 app = FastAPI(title="Armonia Coaching API")
 
@@ -114,8 +103,8 @@ if OPENAI_API_KEY:
         client = None
 
 
-def _initial_history(system_prompt: str) -> List[Dict[str, str]]:
-    return [{"role": "system", "content": system_prompt}]
+def _initial_history() -> List[Dict[str, str]]:
+    return [{"role": "system", "content": SYSTEM_PROMPT}]
 
 
 def _prune_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -158,51 +147,23 @@ def _fallback_message(user_message: str, youtube: str) -> str:
         prefix = "أدري إن عندك سؤال مهم بس الخدمة متوقفة مؤقتاً."
     else:
         prefix = "العذر والسموحة، الخدمة متوقفة مؤقتاً."
-    # لا نرجّع روابط يوتيوب داخل النص؛ الرابط يُعرض خارجياً من الحقل youtube
-    return f"{prefix}"
+    return f"{prefix} تقدر تشوف التمرين المقترح هنا: {youtube}"
 
 
-def _strip_youtube_links(text: str) -> str:
-    """يحذف أي روابط يوتيوب (raw أو Markdown) من نص المساعد."""
-    if not text:
-        return text
-    import re
-    # حذف الروابط المضمنة Markdown ليوتيوب
-    text = re.sub(r"\[([^\]]+)\]\((https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s)]+)\)", r"\1", text, flags=re.IGNORECASE)
-    # حذف أي URLs مباشرة ليوتيوب
-    text = re.sub(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/\S+", "", text, flags=re.IGNORECASE)
-    # تقليل الفراغات الناتجة
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text
-
-
-def _ns_key(service: str, session_id: str) -> str:
-    """مفتاح جلسة namespaced حتى ما تختلط جلسات الخدمات."""
-    return f"{service}:{session_id}"
-
-
-async def _update_session(service: str, session_id: str, user_text: str, assistant_text: str, system_prompt: str) -> int:
-    key = _ns_key(service, session_id)
+async def _update_session(session_id: str, user_text: str, assistant_text: str) -> int:
     async with SESSIONS_LOCK:
-        history = SESSIONS.setdefault(key, _initial_history(system_prompt))
-        # لو كانت أول مره، نضمن أول رسالة system هي البرمبت الصحيح
-        if history and history[0]["role"] == "system" and history[0]["content"] != system_prompt:
-            history[0]["content"] = system_prompt
+        history = SESSIONS.setdefault(session_id, _initial_history())
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": assistant_text})
         pruned = _prune_history(history)
-        SESSIONS[key] = pruned
+        SESSIONS[session_id] = pruned
         turns = sum(1 for message in pruned if message["role"] == "assistant")
         return turns
 
 
-async def _get_history(service: str, session_id: str, system_prompt: str) -> List[Dict[str, str]]:
-    key = _ns_key(service, session_id)
+async def _get_history(session_id: str) -> List[Dict[str, str]]:
     async with SESSIONS_LOCK:
-        history = SESSIONS.setdefault(key, _initial_history(system_prompt))
-        # نضمن أول رسالة system هي البرمبت الصحيح دائماً
-        if history and history[0]["role"] == "system" and history[0]["content"] != system_prompt:
-            history[0]["content"] = system_prompt
+        history = SESSIONS.setdefault(session_id, _initial_history())
         return list(history)
 
 
@@ -214,14 +175,12 @@ async def health() -> Dict[str, object]:
         "status": "ok",
         "coaching": bool(OPENAI_API_KEY),
         "maps": list(BODY_MAP.keys()),
-        "services": ["coach", "family"],
     }
 
 
 # ============================== Helpers للتحليل ===============================
 
 def _bm_items_for_side(side_key: str) -> List[dict]:
-    """يرجع عناصر BODY_MAP[side].items إن أمكن."""
     try:
         side_map = BODY_MAP.get(side_key) or {}
         items = side_map.get("items") or side_map.get("ITEMS") or []
@@ -233,33 +192,19 @@ def _bm_items_for_side(side_key: str) -> List[dict]:
 
 
 def _lookup_by_en(side_key: str, name_en: str) -> tuple[str, str]:
-    """
-    يحاول إيجاد (muscle_ar, region) عبر name_en ضمن BODY_MAP للجهة،
-    ثم الجهة الأخرى إن فشل. عند الفشل يرجّع (name_en, "").
-    """
     name_en_l = (name_en or "").strip().lower()
-    # الجهة نفسها
     for it in _bm_items_for_side(side_key):
         if str(it.get("name_en", "")).strip().lower() == name_en_l:
             return (it.get("name_ar") or name_en, it.get("region") or "")
-    # الجهة الأخرى
     other = "back" if side_key == "front" else "front"
     for it in _bm_items_for_side(other):
         if str(it.get("name_en", "")).strip().lower() == name_en_l:
             return (it.get("name_ar") or name_en, it.get("region") or "")
-    # فشل
     return (name_en or "", "")
 
 
 def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
-    """
-    يحوّل item بأي صيغة إلى Muscle:
-      - dict: يدعم مفاتيح muscle_ar/name_ar/ar, muscle_en/name_en/en, region, prob/score/p
-      - tuple/list: (en, prob) أو (en, region, prob)
-      - str: تعتبر muscle_en
-    """
     try:
-        # dict
         if isinstance(item, dict):
             ar = item.get("muscle_ar") or item.get("name_ar") or item.get("ar") or ""
             en = item.get("muscle_en") or item.get("name_en") or item.get("en") or ""
@@ -281,8 +226,6 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
                 region=region or "",
                 prob=max(0.0, min(prob, 1.0)),
             )
-
-        # tuple/list: (en, prob) أو (en, region, prob)
         if isinstance(item, (list, tuple)) and len(item) >= 1:
             en = str(item[0] or "")
             region = ""
@@ -306,8 +249,6 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
                 region=region or "",
                 prob=max(0.0, min(prob, 1.0)),
             )
-
-        # string: اعتبرها muscle_en
         if isinstance(item, str):
             en = item
             ar, region = _lookup_by_en(side_key, en)
@@ -317,7 +258,6 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
                 region=region or "",
                 prob=0.0,
             )
-
     except Exception as exc:
         logger.exception("Failed to coerce muscle item: %r", exc)
 
@@ -328,20 +268,13 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
-    """
-    يُرجع نتائج موحّدة حتى لو تغيّر شكل مخرجات analyze_selection
-    (list[dict]/list[str]/list[tuple]/dict يحتوي على 'results'/غير ذلك).
-    """
     raw = analyze_selection(
         payload.side, payload.circle.cx, payload.circle.cy, payload.circle.radius
     )
-
-    # قد يرجع dict فيه 'results' أو مباشرة list
     if isinstance(raw, dict) and "results" in raw:
         raw_list = raw.get("results", [])
     else:
         raw_list = raw
-
     if not isinstance(raw_list, list):
         raw_list = []
 
@@ -356,10 +289,9 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
 
 # ================================ Chat Helpers ===============================
 
-async def _handle_chat(payload: ChatRequest, service: str, system_prompt: str) -> ChatResponse:
-    # نولّد/نستخدم session_id من العميل لكن نخزن داخليًا مع namespace للخدمة
-    sid = payload.session_id or uuid4().hex
-    history = await _get_history(service, sid, system_prompt)
+async def _handle_chat(payload: ChatRequest) -> ChatResponse:
+    session_id = payload.session_id or uuid4().hex
+    history = await _get_history(session_id)
 
     context_message = _build_context_message(payload.context)
     request_messages = list(history)
@@ -392,13 +324,10 @@ async def _handle_chat(payload: ChatRequest, service: str, system_prompt: str) -
     else:
         reply_text = _fallback_message(payload.user_message, youtube)
 
-    # نظّف أي روابط يوتيوب من النص، ونترك رابط واحد عبر الحقل youtube فقط
-    reply_text = _strip_youtube_links(reply_text)
-
-    turns = await _update_session(service, sid, payload.user_message, reply_text, system_prompt)
+    turns = await _update_session(session_id, payload.user_message, reply_text)
 
     return ChatResponse(
-        session_id=sid,
+        session_id=session_id,
         reply=reply_text,
         turns=turns,
         usedOpenAI=used_openai,
@@ -407,20 +336,12 @@ async def _handle_chat(payload: ChatRequest, service: str, system_prompt: str) -
 
 
 # ================================= Chat APIs =================================
-# الإندبوينتات القديمة تبقى كما هي (تستخدم برمبت المدرّب)
+
 @app.post("/api/chat/send", response_model=ChatResponse)
 async def send_chat(payload: ChatRequest) -> ChatResponse:
-    return await _handle_chat(payload, service="coach", system_prompt=COACH_PROMPT)
+    return await _handle_chat(payload)
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def send_chat_alias(payload: ChatRequest) -> ChatResponse:
-    return await _handle_chat(payload, service="coach", system_prompt=COACH_PROMPT)
-
-# إندبوينتات جديدة للإرشاد الأسري مع جلسة منفصلة وبرمبت مختلف
-@app.post("/api/family/chat", response_model=ChatResponse)
-async def family_chat(payload: ChatRequest) -> ChatResponse:
-    return await _handle_chat(payload, service="family", system_prompt=FAMILY_PROMPT)
-
-@app.post("/api/family/send", response_model=ChatResponse)
-async def family_send(payload: ChatRequest) -> ChatResponse:
-    return await _handle_chat(payload, service="family", system_prompt=FAMILY_PROMPT)
+    return await _handle_chat(payload)
