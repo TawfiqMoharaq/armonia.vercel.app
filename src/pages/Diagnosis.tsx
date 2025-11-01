@@ -1,3 +1,4 @@
+// src/pages/Diagnosis.tsx
 import { useEffect, useMemo, useState } from "react";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
@@ -6,7 +7,7 @@ import type { MuscleContext } from "../lib/api";
 import { analyzeSelection } from "../lib/api";
 import { BODY_MAPS, type BodySideKey } from "../data/bodyMaps";
 
-// ✅ إضافات: مرجع التمارين + بطاقة العرض
+// ✅ التمارين + بطاقة العرض
 import ExerciseCard from "../components/ExerciseCard";
 import {
   getExercisesByMuscle,
@@ -53,21 +54,23 @@ const INTENSITY_LEVELS = [
   { value: "intense", label: "قوي" },
 ] as const;
 
-const DEFAULT_CIRCLE: CircleSelection = {
-  cx: 0.5,
-  cy: 0.45,
-  radius: 0.07,
-};
+// ⚠️ الدائرة الافتراضية نبقيها لكنها لن تُستخدم حتى يحصل تفاعل من المستخدم
+const DEFAULT_CIRCLE: CircleSelection = { cx: 0.5, cy: 0.45, radius: 0.07 };
 
 export default function Diagnosis() {
   const [side, setSide] = useState<BodySideKey>("front");
   const [circle, setCircle] = useState<CircleSelection>(DEFAULT_CIRCLE);
+
+  // ✅ جديد: علم يثبت أن المستخدم تفاعل (نقَر أو غيّر نصف القطر)
+  const [hasPicked, setHasPicked] = useState(false);
+
   const [results, setResults] = useState<MuscleContext[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [painLevel, setPainLevel] = useState<(typeof PAIN_LEVELS)[number]["value"]>("moderate");
   const [intensityLevel, setIntensityLevel] = useState<(typeof INTENSITY_LEVELS)[number]["value"]>("moderate");
 
+  // ——— احتياط محلي عند فشل API ———
   const computeFallbackResults = (sideKey: BodySideKey, selection: CircleSelection): MuscleContext[] => {
     const mapData = BODY_MAPS[sideKey];
     if (!mapData) return [];
@@ -90,7 +93,15 @@ export default function Diagnosis() {
     }));
   };
 
+  // ✅ منع التحليل التلقائي قبل تفاعل المستخدم
   useEffect(() => {
+    if (!hasPicked) {
+      setResults([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     const selection = { cx: circle.cx, cy: circle.cy, radius: circle.radius };
     let cancelled = false;
 
@@ -103,8 +114,7 @@ export default function Diagnosis() {
           if (response.results.length) {
             setResults(response.results);
           } else {
-            const fallback = computeFallbackResults(side, selection);
-            setResults(fallback);
+            setResults(computeFallbackResults(side, selection));
           }
         }
       } catch (err) {
@@ -128,10 +138,11 @@ export default function Diagnosis() {
     return () => {
       cancelled = true;
     };
-  }, [side, circle.cx, circle.cy, circle.radius]);
+  }, [hasPicked, side, circle.cx, circle.cy, circle.radius]);
 
   const map = BODY_MAPS[side];
 
+  // ——— الأحداث التي تُثبت التفاعل ———
   const handleBodyClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const cx = (event.clientX - rect.left) / rect.width;
@@ -141,11 +152,13 @@ export default function Diagnosis() {
       cx: Math.min(Math.max(cx, 0), 1),
       cy: Math.min(Math.max(cy, 0), 1),
     }));
+    setHasPicked(true); // ← أول تفاعل
   };
 
   const handleRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const next = Number(event.target.value) / 100;
     setCircle((prev) => ({ ...prev, radius: next }));
+    setHasPicked(true); // ← يعتبر تفاعل
   };
 
   const circleStyle = {
@@ -155,7 +168,10 @@ export default function Diagnosis() {
     top: `${Math.max(circle.cy - circle.radius, 0) * 100}%`,
   };
 
-  const rankedResults = useMemo(() => results.slice(0, 2), [results]);
+  const rankedResults = useMemo(
+    () => (hasPicked ? results.slice(0, 2) : []), // ✅ لا نتائج قبل التفاعل
+    [results, hasPicked]
+  );
 
   const resultWithMeta = useMemo(
     () =>
@@ -182,7 +198,7 @@ export default function Diagnosis() {
     return `مستوى الألم: ${painLabel}. مستوى شدة التمرين المطلوب: ${intensityLabel}. ${muscleSnippet}أعطني نصائح وتمارين مختصرة تراعي هذه المعطيات وتأكد من تذكيري بالسلامة. إذا رشّحت تمرينًا فاكتب اسمه داخل JSON بالحقل "exercise".`;
   }, [painLabel, intensityLabel, rankedResults]);
 
-  // ===== تلقائي: نختار تمرين الفخذ إذا كانت ضمن أعلى العضلات =====
+  // تلقائي: نختار تمرين الفخذ فقط بعد تفاعل والمخرجات تدل على الفخذ
   const isThighsLikely = useMemo(
     () => rankedResults.some((r) => (r.muscle_en ?? "").toLowerCase().includes("thigh")),
     [rankedResults]
@@ -190,14 +206,13 @@ export default function Diagnosis() {
   const defaultExercise: Exercise | null = useMemo(() => {
     if (!isThighsLikely) return null;
     const list = getExercisesByMuscle("thighs");
-    return list.length ? list[0] : null; // Bodyweight Squat عادة
+    return list.length ? list[0] : null;
   }, [isThighsLikely]);
 
-  // التمرين الذي سنعرضه تحت الشات (افتراضي أو من الشات)
+  // التمرين أسفل الشات
   const [recommended, setRecommended] = useState<Exercise | null>(null);
   useEffect(() => {
-    // كل ما تغيّرت نتائج المجسّم نرجّع الافتراضي (لو ما فيه اقتراح من الشات)
-    if (!recommended) setRecommended(defaultExercise);
+    if (!recommended) setRecommended(defaultExercise || null);
   }, [defaultExercise, recommended]);
 
   return (
@@ -206,7 +221,7 @@ export default function Diagnosis() {
 
       <section className="max-w-5xl mx-auto p-6 space-y-8" dir="rtl">
         <header className="text-center space-y-3">
-          <h1 className="text-زxl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
+          <h1 className="text-2xl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
           <p className="text-gray-600 text-sm md:text-base">{INTRO_TEXT}</p>
         </header>
 
@@ -241,24 +256,25 @@ export default function Diagnosis() {
                     className="absolute rounded-full border-2 border-dashed border-[#0A6D8B]/80 bg-[#0A6D8B]/10 transition-all"
                     style={circleStyle}
                   />
-                  {resultWithMeta.map(({ data, meta }, index) => {
-                    if (!meta) return null;
-                    const [x1, y1, x2, y2] = meta.box_norm;
-                    const centerX = ((x1 + x2) / 2) * 100;
-                    const centerY = ((y1 + y2) / 2) * 100;
-                    const diameter = Math.max(x2 - x1, y2 - y1) * 100 * 0.9;
-                    const size = Math.max(diameter, 4);
-                    const left = Math.min(Math.max(centerX - size / 2, 0), 100 - size);
-                    const top = Math.min(Math.max(centerY - size / 2, 0), 100 - size);
-                    const badgeCls = BADGE_CLASSES[index] ?? "border-[#14B8A6]";
-                    return (
-                      <div
-                        key={data.muscle_en}
-                        className={`absolute border-2 ${badgeCls} rounded-full pointer-events-none bg-[#0A6D8B]/10`}
-                        style={{ left: `${left}%`, top: `${top}%`, width: `${size}%`, height: `${size}%` }}
-                      />
-                    );
-                  })}
+                  {hasPicked &&
+                    resultWithMeta.map(({ data, meta }, index) => {
+                      if (!meta) return null;
+                      const [x1, y1, x2, y2] = meta.box_norm;
+                      const centerX = ((x1 + x2) / 2) * 100;
+                      const centerY = ((y1 + y2) / 2) * 100;
+                      const diameter = Math.max(x2 - x1, y2 - y1) * 100 * 0.9;
+                      const size = Math.max(diameter, 4);
+                      const left = Math.min(Math.max(centerX - size / 2, 0), 100 - size);
+                      const top = Math.min(Math.max(centerY - size / 2, 0), 100 - size);
+                      const badgeCls = BADGE_CLASSES[index] ?? "border-[#14B8A6]";
+                      return (
+                        <div
+                          key={data.muscle_en}
+                          className={`absolute border-2 ${badgeCls} rounded-full pointer-events-none bg-[#0A6D8B]/10`}
+                          style={{ left: `${left}%`, top: `${top}%`, width: `${size}%`, height: `${size}%` }}
+                        />
+                      );
+                    })}
                 </div>
               </div>
 
@@ -338,7 +354,7 @@ export default function Diagnosis() {
           <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-[#0A6D8B]">{RESULTS_TITLE}</h2>
-              {loading && <span className="text-xs text-[#0A6D8B]">{LOADING_LABEL}</span>}
+              {hasPicked && loading && <span className="text-xs text-[#0A6D8B]">{LOADING_LABEL}</span>}
             </div>
 
             {error && (
@@ -347,40 +363,46 @@ export default function Diagnosis() {
               </div>
             )}
 
-            {!error && !loading && rankedResults.length === 0 && (
+            {!error && !loading && hasPicked && rankedResults.length === 0 && (
               <div className="rounded-lg border border-dashed border-gray-300 px-4 py-5 text-sm text-gray-500 text-center">
                 {EMPTY_HINT}
               </div>
             )}
 
+            {!hasPicked && (
+              <div className="rounded-lg border border-dashed border-gray-300 px-4 py-5 text-sm text-gray-500 text-center">
+                اضغط على المجسّم أولاً لبدء التحليل.
+              </div>
+            )}
+
             <ul className="space-y-3 text-sm text-gray-700">
-              {resultWithMeta.map(({ data }, index) => (
-                <li
-                  key={data.muscle_en}
-                  className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3"
-                >
-                  <div>
-                    <p className="font-semibold text-[#0A6D8B]">{data.muscle_ar}</p>
-                    <p className="text-xs text-gray-500">{data.muscle_en}</p>
-                    <p className="text-xs text-gray-400 mt-1">{"المنطقة: "} {data.region}</p>
-                  </div>
-                  <span className="text-[#18A4B8] font-semibold">
-                    {Math.round((data.prob ?? 0) * 100)}%
-                  </span>
-                </li>
-              ))}
+              {hasPicked &&
+                resultWithMeta.map(({ data }, index) => (
+                  <li
+                    key={data.muscle_en}
+                    className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3"
+                  >
+                    <div>
+                      <p className="font-semibold text-[#0A6D8B]">{data.muscle_ar}</p>
+                      <p className="text-xs text-gray-500">{data.muscle_en}</p>
+                      <p className="text-xs text-gray-400 mt-1">{"المنطقة: "} {data.region}</p>
+                    </div>
+                    <span className="text-[#18A4B8] font-semibold">
+                      {Math.round((data.prob ?? 0) * 100)}%
+                    </span>
+                  </li>
+                ))}
             </ul>
           </div>
         </div>
 
-        {/* ✅ كرت الشات + التمرين المدمج تحته تلقائيًا */}
+        {/* ✅ الشات لا يستقبل سياق ولا يشتغل تلقائيًا إلا بعد التفاعل */}
         <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-4">
           <ChatBox
-            musclesContext={rankedResults}
-            autoStartAdvice
+            musclesContext={hasPicked ? rankedResults : []}  // ← لا سياق قبل التفاعل
+            autoStartAdvice={hasPicked}                      // ← لا تشغيل تلقائي قبل التفاعل
             autoStartPrompt={autoStartPrompt}
             sessionKey={`${painLevel}-${intensityLevel}`}
-            // ✅ إذا ذكر الشات تمرينًا بالاسم (سكوات/ثايز...) نعرضه فورًا
             onSuggestedExercise={(name) => {
               const hit = findExerciseByName(name) || defaultExercise || null;
               setRecommended(hit);
