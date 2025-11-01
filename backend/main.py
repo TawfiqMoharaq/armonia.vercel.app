@@ -20,10 +20,21 @@ from .muscle_data import BODY_MAP, BodySideKey
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY_MESSAGES = 24
-SYSTEM_PROMPT = (
+
+# -------------------- برمبتات مفصولة للخدمات --------------------
+COACH_PROMPT = (
     "أنت مدرب لياقة افتراضي يتكلم بلهجة سعودية بسيطة. حافظ على الإرشادات عملية وواضحة بدون تشخيص طبي. "
     "ذكّر المستخدم دائماً بالسلامة، الإحماء، والتوقف إذا زاد الألم. لا تكرر نفس الجمل وقدّم خطوات مختصرة وواضحة."
 )
+
+FAMILY_PROMPT = (
+    "أنت مرشد أسري يتكلم بلهجة سعودية مريحة. هدفك مساعدة الأسرة على التعامل اليومي مع الطفل "
+    "من خلال روتين بسيط، تنظيم البيئة الحسية، أدوات تواصل بديلة، وتعزيز السلوك الإيجابي. "
+    "قدّم نصائح عملية قصيرة ومباشرة للعائلة، وتجنب أي تشخيص طبي. لا تكرر الجمل."
+)
+
+# للإبقاء على التوافق مع الشيفرة القديمة
+SYSTEM_PROMPT = COACH_PROMPT
 
 app = FastAPI(title="Armonia Coaching API")
 
@@ -103,8 +114,8 @@ if OPENAI_API_KEY:
         client = None
 
 
-def _initial_history() -> List[Dict[str, str]]:
-    return [{"role": "system", "content": SYSTEM_PROMPT}]
+def _initial_history(system_prompt: str) -> List[Dict[str, str]]:
+    return [{"role": "system", "content": system_prompt}]
 
 
 def _prune_history(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -147,23 +158,51 @@ def _fallback_message(user_message: str, youtube: str) -> str:
         prefix = "أدري إن عندك سؤال مهم بس الخدمة متوقفة مؤقتاً."
     else:
         prefix = "العذر والسموحة، الخدمة متوقفة مؤقتاً."
-    return f"{prefix} تقدر تشوف التمرين المقترح هنا: {youtube}"
+    # لا نرجّع روابط يوتيوب داخل النص؛ الرابط يُعرض خارجياً من الحقل youtube
+    return f"{prefix}"
 
 
-async def _update_session(session_id: str, user_text: str, assistant_text: str) -> int:
+def _strip_youtube_links(text: str) -> str:
+    """يحذف أي روابط يوتيوب (raw أو Markdown) من نص المساعد."""
+    if not text:
+        return text
+    import re
+    # حذف الروابط المضمنة Markdown ليوتيوب
+    text = re.sub(r"\[([^\]]+)\]\((https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s)]+)\)", r"\1", text, flags=re.IGNORECASE)
+    # حذف أي URLs مباشرة ليوتيوب
+    text = re.sub(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/\S+", "", text, flags=re.IGNORECASE)
+    # تقليل الفراغات الناتجة
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def _ns_key(service: str, session_id: str) -> str:
+    """مفتاح جلسة namespaced حتى ما تختلط جلسات الخدمات."""
+    return f"{service}:{session_id}"
+
+
+async def _update_session(service: str, session_id: str, user_text: str, assistant_text: str, system_prompt: str) -> int:
+    key = _ns_key(service, session_id)
     async with SESSIONS_LOCK:
-        history = SESSIONS.setdefault(session_id, _initial_history())
+        history = SESSIONS.setdefault(key, _initial_history(system_prompt))
+        # لو كانت أول مره، نضمن أول رسالة system هي البرمبت الصحيح
+        if history and history[0]["role"] == "system" and history[0]["content"] != system_prompt:
+            history[0]["content"] = system_prompt
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": assistant_text})
         pruned = _prune_history(history)
-        SESSIONS[session_id] = pruned
+        SESSIONS[key] = pruned
         turns = sum(1 for message in pruned if message["role"] == "assistant")
         return turns
 
 
-async def _get_history(session_id: str) -> List[Dict[str, str]]:
+async def _get_history(service: str, session_id: str, system_prompt: str) -> List[Dict[str, str]]:
+    key = _ns_key(service, session_id)
     async with SESSIONS_LOCK:
-        history = SESSIONS.setdefault(session_id, _initial_history())
+        history = SESSIONS.setdefault(key, _initial_history(system_prompt))
+        # نضمن أول رسالة system هي البرمبت الصحيح دائماً
+        if history and history[0]["role"] == "system" and history[0]["content"] != system_prompt:
+            history[0]["content"] = system_prompt
         return list(history)
 
 
@@ -175,6 +214,7 @@ async def health() -> Dict[str, object]:
         "status": "ok",
         "coaching": bool(OPENAI_API_KEY),
         "maps": list(BODY_MAP.keys()),
+        "services": ["coach", "family"],
     }
 
 
@@ -316,9 +356,10 @@ async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
 
 # ================================ Chat Helpers ===============================
 
-async def _handle_chat(payload: ChatRequest) -> ChatResponse:
-    session_id = payload.session_id or uuid4().hex
-    history = await _get_history(session_id)
+async def _handle_chat(payload: ChatRequest, service: str, system_prompt: str) -> ChatResponse:
+    # نولّد/نستخدم session_id من العميل لكن نخزن داخليًا مع namespace للخدمة
+    sid = payload.session_id or uuid4().hex
+    history = await _get_history(service, sid, system_prompt)
 
     context_message = _build_context_message(payload.context)
     request_messages = list(history)
@@ -351,10 +392,13 @@ async def _handle_chat(payload: ChatRequest) -> ChatResponse:
     else:
         reply_text = _fallback_message(payload.user_message, youtube)
 
-    turns = await _update_session(session_id, payload.user_message, reply_text)
+    # نظّف أي روابط يوتيوب من النص، ونترك رابط واحد عبر الحقل youtube فقط
+    reply_text = _strip_youtube_links(reply_text)
+
+    turns = await _update_session(service, sid, payload.user_message, reply_text, system_prompt)
 
     return ChatResponse(
-        session_id=session_id,
+        session_id=sid,
         reply=reply_text,
         turns=turns,
         usedOpenAI=used_openai,
@@ -363,12 +407,20 @@ async def _handle_chat(payload: ChatRequest) -> ChatResponse:
 
 
 # ================================= Chat APIs =================================
-
+# الإندبوينتات القديمة تبقى كما هي (تستخدم برمبت المدرّب)
 @app.post("/api/chat/send", response_model=ChatResponse)
 async def send_chat(payload: ChatRequest) -> ChatResponse:
-    return await _handle_chat(payload)
-
+    return await _handle_chat(payload, service="coach", system_prompt=COACH_PROMPT)
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def send_chat_alias(payload: ChatRequest) -> ChatResponse:
-    return await _handle_chat(payload)
+    return await _handle_chat(payload, service="coach", system_prompt=COACH_PROMPT)
+
+# إندبوينتات جديدة للإرشاد الأسري مع جلسة منفصلة وبرمبت مختلف
+@app.post("/api/family/chat", response_model=ChatResponse)
+async def family_chat(payload: ChatRequest) -> ChatResponse:
+    return await _handle_chat(payload, service="family", system_prompt=FAMILY_PROMPT)
+
+@app.post("/api/family/send", response_model=ChatResponse)
+async def family_send(payload: ChatRequest) -> ChatResponse:
+    return await _handle_chat(payload, service="family", system_prompt=FAMILY_PROMPT)
