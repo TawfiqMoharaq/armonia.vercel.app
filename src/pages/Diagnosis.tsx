@@ -6,6 +6,7 @@ import type { MuscleContext } from "../lib/api";
 import { analyzeSelection } from "../lib/api";
 import { BODY_MAPS, type BodySideKey } from "../data/bodyMaps";
 
+// ✅ إضافات: مرجع التمارين + بطاقة العرض
 import ExerciseCard from "../components/ExerciseCard";
 import {
   getExercisesByMuscle,
@@ -13,13 +14,18 @@ import {
   type Exercise,
 } from "../data/exercises";
 
-interface CircleSelection { cx: number; cy: number; radius: number; }
+interface CircleSelection {
+  cx: number;
+  cy: number;
+  radius: number;
+}
 
 const HEADLINE = "حدّد موضع الإزعاج بدقّة";
 const INTRO_TEXT =
   "اختر الجهة الأمامية أو الخلفية ثم اضغط على الصورة لتحديد مكان الإزعاج. غيّر حجم الدائرة إذا احتجت، وسيحاول النظام اقتراح العضلات الأقرب لتقديم نصائح وتمارين مناسبة.";
 const RESULTS_TITLE = "أقرب العضلات المتأثرة";
-const ERROR_MESSAGE = "تعذّر تحديد العضلة بدقّة، جرّب مرة أخرى أو صغّر الدائرة.";
+const ERROR_MESSAGE =
+  "تعذّر تحديد العضلة بدقّة، جرّب مرة أخرى أو صغّر الدائرة.";
 const RADIUS_LABEL = "قطر الدائرة (% من الصورة):";
 const RADIUS_HINT =
   "اضغط على الصورة لتغيير مركز الدائرة. إن كانت النتائج غير دقيقة، حرّك الدائرة أو صغّر نصف القطر لإعادة التحليل.";
@@ -27,7 +33,11 @@ const LOADING_LABEL = "يتم التحليل";
 const EMPTY_HINT =
   "حرّك الدائرة لتحديد موضع أوضح، ثم ستظهر العضلات المحتملة هنا.";
 
-const SIDE_LABELS: Record<BodySideKey, string> = { front: "الجزء الأمامي", back: "الجزء الخلفي" };
+const SIDE_LABELS: Record<BodySideKey, string> = {
+  front: "الجزء الأمامي",
+  back: "الجزء الخلفي",
+};
+
 const BADGE_CLASSES = ["border-[#0A6D8B]", "border-[#18A4B8]", "border-[#7C3AED]"];
 
 const PAIN_LEVELS = [
@@ -43,36 +53,11 @@ const INTENSITY_LEVELS = [
   { value: "intense", label: "قوي" },
 ] as const;
 
-const DEFAULT_CIRCLE: CircleSelection = { cx: 0.5, cy: 0.45, radius: 0.07 };
-
-// 🔎 مُفسّر تمرين افتراضي آمن
-function resolveExercise(name?: string | null): Exercise | null {
-  if (!name) return null;
-  const tries = [
-    name,
-    /squat/i.test(name) ? "Bodyweight Squat" : "",
-    /سكوات|سكوّت/i.test(name) ? "Bodyweight Squat" : "",
-    /plank/i.test(name) ? "Plank" : "",
-    /بلانك/i.test(name) ? "Plank" : "",
-    /chin\s*tuck/i.test(name) ? "Chin Tuck" : "",
-    /ارجاع الذقن|إرجاع الذقن/i.test(name) ? "Chin Tuck" : "",
-  ].filter(Boolean) as string[];
-  for (const n of tries) {
-    const hit = findExerciseByName(n);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-// ✅ كشف “الفخذين” بشكل أوسع (إنجليزي + عربي)
-function looksLikeThigh(m: MuscleContext): boolean {
-  const en = (m.muscle_en || "").toLowerCase();
-  const ar = (m.muscle_ar || "");
-  return (
-    /(thigh|quad|quadriceps|hamstring|adductor|adductors)/i.test(en) ||
-    /فخذ|أمامية الفخذ|خلفية الفخذ|أوتار|مقربات/.test(ar)
-  );
-}
+const DEFAULT_CIRCLE: CircleSelection = {
+  cx: 0.5,
+  cy: 0.45,
+  radius: 0.07,
+};
 
 export default function Diagnosis() {
   const [side, setSide] = useState<BodySideKey>("front");
@@ -96,7 +81,7 @@ export default function Diagnosis() {
     entries.sort((a, b) => a.dist - b.dist);
     const top = entries.slice(0, 5);
     if (!top.length) return [];
-    const weightSum = top.reduce((sum, cur) => sum + 1 / (cur.dist + 1e-6), 0);
+    const weightSum = top.reduce((sum, current) => sum + 1 / (current.dist + 1e-6), 0);
     return top.map(({ item, dist }) => ({
       muscle_ar: item.name_ar,
       muscle_en: item.name_en,
@@ -105,7 +90,6 @@ export default function Diagnosis() {
     }));
   };
 
-  // ✅ حتى لو الـAPI واقف: عندنا fallback محلي دايمًا
   useEffect(() => {
     const selection = { cx: circle.cx, cy: circle.cy, radius: circle.radius };
     let cancelled = false;
@@ -119,14 +103,21 @@ export default function Diagnosis() {
           if (response.results.length) {
             setResults(response.results);
           } else {
-            setResults(computeFallbackResults(side, selection));
+            const fallback = computeFallbackResults(side, selection);
+            setResults(fallback);
           }
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
+          console.error("Selection analysis failed", err);
           const fallback = computeFallbackResults(side, selection);
-          setResults(fallback);
-          if (!fallback.length) setError(ERROR_MESSAGE);
+          if (fallback.length) {
+            setResults(fallback);
+            setError(null);
+          } else {
+            setResults([]);
+            setError(ERROR_MESSAGE);
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -134,15 +125,17 @@ export default function Diagnosis() {
     }
 
     void run();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [side, circle.cx, circle.cy, circle.radius]);
 
   const map = BODY_MAPS[side];
 
-  const handleBodyClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const cx = (e.clientX - rect.left) / rect.width;
-    const cy = (e.clientY - rect.top) / rect.height;
+  const handleBodyClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const cx = (event.clientX - rect.left) / rect.width;
+    const cy = (event.clientY - rect.top) / rect.height;
     setCircle((prev) => ({
       ...prev,
       cx: Math.min(Math.max(cx, 0), 1),
@@ -150,8 +143,8 @@ export default function Diagnosis() {
     }));
   };
 
-  const handleRadiusChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const next = Number(e.target.value) / 100;
+  const handleRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const next = Number(event.target.value) / 100;
     setCircle((prev) => ({ ...prev, radius: next }));
   };
 
@@ -168,17 +161,17 @@ export default function Diagnosis() {
     () =>
       rankedResults.map((item) => ({
         data: item,
-        meta: map.items.find((c) => c.name_en === item.muscle_en),
+        meta: map.items.find((candidate) => candidate.name_en === item.muscle_en),
       })),
     [rankedResults, map.items]
   );
 
   const painLabel = useMemo(
-    () => PAIN_LEVELS.find((l) => l.value === painLevel)?.label ?? "",
+    () => PAIN_LEVELS.find((level) => level.value === painLevel)?.label ?? "",
     [painLevel]
   );
   const intensityLabel = useMemo(
-    () => INTENSITY_LEVELS.find((l) => l.value === intensityLevel)?.label ?? "",
+    () => INTENSITY_LEVELS.find((level) => level.value === intensityLevel)?.label ?? "",
     [intensityLevel]
   );
 
@@ -189,29 +182,23 @@ export default function Diagnosis() {
     return `مستوى الألم: ${painLabel}. مستوى شدة التمرين المطلوب: ${intensityLabel}. ${muscleSnippet}أعطني نصائح وتمارين مختصرة تراعي هذه المعطيات وتأكد من تذكيري بالسلامة. إذا رشّحت تمرينًا فاكتب اسمه داخل JSON بالحقل "exercise".`;
   }, [painLabel, intensityLabel, rankedResults]);
 
-  // ===== كشف الفخذين (مقوى)
+  // ===== تلقائي: نختار تمرين الفخذ إذا كانت ضمن أعلى العضلات =====
   const isThighsLikely = useMemo(
-    () => rankedResults.some((r) => looksLikeThigh(r)),
+    () => rankedResults.some((r) => (r.muscle_en ?? "").toLowerCase().includes("thigh")),
     [rankedResults]
   );
-
-  // افتراضي: سكوات لو الفخذين مرشحَين
   const defaultExercise: Exercise | null = useMemo(() => {
     if (!isThighsLikely) return null;
     const list = getExercisesByMuscle("thighs");
-    return list.length ? list[0] : findExerciseByName("Bodyweight Squat") || null;
+    return list.length ? list[0] : null; // Bodyweight Squat عادة
   }, [isThighsLikely]);
 
-  // التمرين المعرُوض
+  // التمرين الذي سنعرضه تحت الشات (افتراضي أو من الشات)
   const [recommended, setRecommended] = useState<Exercise | null>(null);
-
-  // ✅ اعرض الافتراضي تلقائيًا إذا عندنا نتائج وما فيه اقتراح من الشات
   useEffect(() => {
-    if (!recommended && rankedResults.length > 0) {
-      const hardDefault = findExerciseByName("Bodyweight Squat");
-      setRecommended(defaultExercise || hardDefault || null);
-    }
-  }, [rankedResults, defaultExercise, recommended]);
+    // كل ما تغيّرت نتائج المجسّم نرجّع الافتراضي (لو ما فيه اقتراح من الشات)
+    if (!recommended) setRecommended(defaultExercise);
+  }, [defaultExercise, recommended]);
 
   return (
     <div className="bg-[#F7FAFC] min-h-screen flex flex-col justify-between">
@@ -219,7 +206,7 @@ export default function Diagnosis() {
 
       <section className="max-w-5xl mx-auto p-6 space-y-8" dir="rtl">
         <header className="text-center space-y-3">
-          <h1 className="text-2xl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
+          <h1 className="text-زxl font-semibold text-[#0A6D8B]">{HEADLINE}</h1>
           <p className="text-gray-600 text-sm md:text-base">{INTRO_TEXT}</p>
         </header>
 
@@ -228,7 +215,9 @@ export default function Diagnosis() {
             <button
               key={option}
               onClick={() => setSide(option)}
-              className={`px-5 py-2 rounded-full border font-medium transition ${side === option ? "bg-[#0A6D8B] text-white" : "bg-white text-gray-700"}`}
+              className={`px-5 py-2 rounded-full border font-medium transition ${
+                side === option ? "bg-[#0A6D8B] text-white" : "bg-white text-gray-700"
+              }`}
               style={{ borderColor: side === option ? "#0A6D8B" : "#CBD5F5" }}
             >
               {SIDE_LABELS[option]}
@@ -274,9 +263,18 @@ export default function Diagnosis() {
               </div>
 
               <div className="flex items-center gap-3">
-                <label htmlFor="radius" className="text-sm text-gray-600">{RADIUS_LABEL}</label>
-                <input id="radius" type="range" min={2} max={16}
-                  value={Math.round(circle.radius * 100)} onChange={handleRadiusChange} className="flex-1" />
+                <label htmlFor="radius" className="text-sm text-gray-600">
+                  {RADIUS_LABEL}
+                </label>
+                <input
+                  id="radius"
+                  type="range"
+                  min={2}
+                  max={16}
+                  value={Math.round(circle.radius * 100)}
+                  onChange={handleRadiusChange}
+                  className="flex-1"
+                />
                 <span className="font-medium text-[#0A6D8B] text-sm w-12 text-left">
                   {Math.round(circle.radius * 100)}%
                 </span>
@@ -291,10 +289,20 @@ export default function Diagnosis() {
               <h2 className="text-lg font-semibold text-[#0A6D8B] mb-3">مستوى الألم الحالي</h2>
               <div className="flex flex-wrap gap-3">
                 {PAIN_LEVELS.map((level) => (
-                  <label key={level.value}
-                    className={`cursor-pointer rounded-full border px-4 py-2 text-sm transition ${painLevel === level.value ? "bg-[#0A6D8B] text-white border-[#0A6D8B]" : "bg-white text-gray-700 border-gray-300"}`}>
-                    <input type="radio" name="pain-level" value={level.value}
-                      checked={painLevel === level.value} onChange={() => setPainLevel(level.value)} className="hidden" />
+                  <label
+                    key={level.value}
+                    className={`cursor-pointer rounded-full border px-4 py-2 text-sm transition ${
+                      painLevel === level.value ? "bg-[#0A6D8B] text-white border-[#0A6D8B]" : "bg-white text-gray-700 border-gray-300"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="pain-level"
+                      value={level.value}
+                      checked={painLevel === level.value}
+                      onChange={() => setPainLevel(level.value)}
+                      className="hidden"
+                    />
                     {level.label}
                   </label>
                 ))}
@@ -305,10 +313,20 @@ export default function Diagnosis() {
               <h2 className="text-lg font-semibold text-[#0A6D8B] mb-3">مستوى شدة التمرين المرغوب</h2>
               <div className="flex flex-wrap gap-3">
                 {INTENSITY_LEVELS.map((level) => (
-                  <label key={level.value}
-                    className={`cursor-pointer rounded-full border px-4 py-2 text-sm transition ${intensityLevel === level.value ? "bg-[#00767a] text-white border-[#00767a]" : "bg-white text-gray-700 border-gray-300"}`}>
-                    <input type="radio" name="intensity-level" value={level.value}
-                      checked={intensityLevel === level.value} onChange={() => setIntensityLevel(level.value)} className="hidden" />
+                  <label
+                    key={level.value}
+                    className={`cursor-pointer rounded-full border px-4 py-2 text-sm transition ${
+                      intensityLevel === level.value ? "bg-[#00767a] text-white border-[#00767a]" : "bg-white text-gray-700 border-gray-300"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="intensity-level"
+                      value={level.value}
+                      checked={intensityLevel === level.value}
+                      onChange={() => setIntensityLevel(level.value)}
+                      className="hidden"
+                    />
                     {level.label}
                   </label>
                 ))}
@@ -337,7 +355,10 @@ export default function Diagnosis() {
 
             <ul className="space-y-3 text-sm text-gray-700">
               {resultWithMeta.map(({ data }, index) => (
-                <li key={data.muscle_en} className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
+                <li
+                  key={data.muscle_en}
+                  className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3"
+                >
                   <div>
                     <p className="font-semibold text-[#0A6D8B]">{data.muscle_ar}</p>
                     <p className="text-xs text-gray-500">{data.muscle_en}</p>
@@ -352,15 +373,16 @@ export default function Diagnosis() {
           </div>
         </div>
 
-        {/* ✅ الشات + الكارد تحت الشات */}
+        {/* ✅ كرت الشات + التمرين المدمج تحته تلقائيًا */}
         <div className="bg-white border rounded-2xl shadow px-6 py-6 space-y-4">
           <ChatBox
             musclesContext={rankedResults}
             autoStartAdvice
             autoStartPrompt={autoStartPrompt}
             sessionKey={`${painLevel}-${intensityLevel}`}
+            // ✅ إذا ذكر الشات تمرينًا بالاسم (سكوات/ثايز...) نعرضه فورًا
             onSuggestedExercise={(name) => {
-              const hit = resolveExercise(name) || findExerciseByName("Bodyweight Squat") || null;
+              const hit = findExerciseByName(name) || defaultExercise || null;
               setRecommended(hit);
             }}
           />
