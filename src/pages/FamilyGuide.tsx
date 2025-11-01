@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { sendChat } from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import ChatReply from "../components/ChatReply";
 
 interface SurveyState {
   sound: string;
@@ -43,8 +42,11 @@ const INITIAL_STATE: SurveyState = {
 
 const stripBoldMarkers = (text: string) => text.replace(/\*\*(.+?)\*\*/g, "$1").trim();
 
+/* تحسين البحث في يوتيوب بكلمات عربية مناسبة */
 const toYoutubeSearchLink = (keywords?: string) => {
-  const base = keywords?.trim() || "family sensory routine tips";
+  const base = (keywords && keywords.trim())
+    ? `${keywords} تمارين روتين عائلي عربي بدون معدات`
+    : "روتين عائلي تمارين خفيفة عربي بدون معدات";
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(base)}`;
 };
 
@@ -53,6 +55,7 @@ const normalizeYoutubeLink = (url: string, fallbackKeywords?: string) => {
   const isYoutube = lower.includes("youtube.com") || lower.includes("youtu.be");
   if (!isYoutube) return url;
 
+  // روابط تجريبية/ناقصة → نحولها لبحث
   if (
     lower.includes("example") ||
     lower.endsWith("watch?v=") ||
@@ -161,9 +164,9 @@ const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
   return nodes.filter((node) => !(typeof node === "string" && node.length === 0));
 };
 
-/* ========================= الدالة الجديدة لعرض رد الشات ========================= */
+/* ========================= تنسيق عرض رد الشات ========================= */
 const renderChatReply = (text: string, fallbackKeywords?: string): ReactNode => {
-  // 1) جهّز السطور
+  // 1) تجهيز السطور
   const lines = text
     .split(/\n+/)
     .map((l) => l.trim())
@@ -192,13 +195,6 @@ const renderChatReply = (text: string, fallbackKeywords?: string): ReactNode => 
     return t;
   };
 
-  const iconClass = (title: string) => {
-    if (/^صباح/.test(title)) return { icon: "🚀", cls: "text-blue-600" };
-    if (/^مساء/.test(title)) return { icon: "🌙", cls: "text-purple-600" };
-    if (/^في المواقف/.test(title) || /^إذا/.test(title)) return { icon: "😣", cls: "text-orange-600" };
-    return { icon: "✨", cls: "text-[#0A6D8B]" };
-  };
-
   const pushSection = () => {
     if (current) sections.push(current);
     current = null;
@@ -221,90 +217,87 @@ const renderChatReply = (text: string, fallbackKeywords?: string): ReactNode => 
   });
   pushSection();
 
-  // 4) رندر منسّق
+  // 4) الرندر — بدون أي إيموجي
   return (
     <div className="space-y-5">
-      {sections.map((sec, i) => {
-        const { icon, cls } = iconClass(sec.title);
-        return (
-          <div key={`sec-${i}`} className="space-y-2">
-            {/* عنوان القسم */}
-            <h3 className={`text-lg md:text-xl font-semibold ${cls}`}>
-              {icon} {sec.title}
-            </h3>
+      {sections.map((sec, i) => (
+        <div key={`sec-${i}`} className="space-y-2">
+          {/* عنوان القسم — بلا رموز */}
+          <h3 className="text-lg md:text-xl font-semibold text-[#0A6D8B]">
+            {sec.title}
+          </h3>
 
-            {/* فقرات */}
-            {sec.paras.map((p, idx) => {
-              // "عنوان: نص"
-              const colon = p.indexOf(":");
-              if (colon > 0 && colon < p.length - 1) {
-                const head = p.slice(0, colon).trim();
-                const body = p.slice(colon + 1).trim();
-                return (
-                  <p key={`p-${idx}`} className="text-[#4A5568] leading-relaxed">
-                    <span className="font-semibold text-[#0A6D8B]">
-                      {head}
-                      {body ? ":" : ""}
-                    </span>{" "}
-                    {body ? renderInline(body, fallbackKeywords) : null}
-                  </p>
-                );
-              }
-
-              // رابط يوتيوب خام → زر
-              if (/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(p)) {
-                return (
-                  <div key={`yt-${idx}`}>
-                    <a
-                      href={normalizeYoutubeLink(p, fallbackKeywords)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-block px-4 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7]"
-                    >
-                      🎧 فتح رابط يوتيوب
-                    </a>
-                  </div>
-                );
-              }
-
-              // نص حر
+          {/* فقرات */}
+          {sec.paras.map((p, idx) => {
+            // "عنوان: نص"
+            const colon = p.indexOf(":");
+            if (colon > 0 && colon < p.length - 1) {
+              const head = p.slice(0, colon).trim();
+              const body = p.slice(colon + 1).trim();
               return (
                 <p key={`p-${idx}`} className="text-[#4A5568] leading-relaxed">
-                  {renderInline(p, fallbackKeywords)}
+                  <span className="font-semibold text-[#0A6D8B]">
+                    {head}
+                    {body ? ":" : ""}
+                  </span>{" "}
+                  {body ? renderInline(body, fallbackKeywords) : null}
                 </p>
               );
-            })}
+            }
 
-            {/* نقاط */}
-            {sec.items.length > 0 && (
-              <ul className="list-disc pr-5 space-y-1 text-[#4A5568]">
-                {sec.items.map((it, j) => (
-                  <li key={`li-${j}`}>{renderInline(it, fallbackKeywords)}</li>
-                ))}
-              </ul>
-            )}
-
-            {/* زر بحث يوتيوب تلقائي إذا ما فيه روابط */}
-            {!sec.paras.some((p) => /https?:\/\//.test(p)) &&
-              !sec.items.some((it) => /https?:\/\//.test(it)) && (
-                <div className="pt-1">
+            // رابط يوتيوب خام → زر
+            if (/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(p)) {
+              return (
+                <div key={`yt-${idx}`}>
                   <a
-                    href={toYoutubeSearchLink(fallbackKeywords || "موسيقى مريحة")}
+                    href={normalizeYoutubeLink(p, fallbackKeywords)}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-block px-4 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7]"
                   >
-                    🎧 اقتراح: بحث يوتيوب مناسب
+                    فتح رابط يوتيوب
                   </a>
                 </div>
-              )}
-          </div>
-        );
-      })}
+              );
+            }
+
+            // نص حر
+            return (
+              <p key={`p-${idx}`} className="text-[#4A5568] leading-relaxed">
+                {renderInline(p, fallbackKeywords)}
+              </p>
+            );
+          })}
+
+          {/* نقاط */}
+          {sec.items.length > 0 && (
+            <ul className="list-disc pr-5 space-y-1 text-[#4A5568]">
+              {sec.items.map((it, j) => (
+                <li key={`li-${j}`}>{renderInline(it, fallbackKeywords)}</li>
+              ))}
+            </ul>
+          )}
+
+          {/* زر بحث يوتيوب تلقائي إذا ما فيه روابط */}
+          {!sec.paras.some((p) => /https?:\/\//.test(p)) &&
+            !sec.items.some((it) => /https?:\/\//.test(it)) && (
+              <div className="pt-1">
+                <a
+                  href={toYoutubeSearchLink(fallbackKeywords || "موسيقى مريحة")}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block px-4 py-2 rounded-lg border border-[#0A6D8B] text-[#0A6D8B] hover:bg-[#E6F4F7]"
+                >
+                  اقتراح: بحث يوتيوب مناسب
+                </a>
+              </div>
+            )}
+        </div>
+      ))}
     </div>
   );
 };
-/* ======================= نهاية تعديل تنسيق ردود الشات ======================= */
+/* ======================= نهاية تنسيق ردود الشات ======================= */
 
 const FamilyGuide = () => {
   const navigate = useNavigate();
@@ -411,9 +404,8 @@ const FamilyGuide = () => {
       className="min-h-screen bg-gradient-to-b from-[#F0F8FA] to-[#FFFFFF] text-gray-800 flex flex-col items-center py-12"
       dir="rtl"
     >
-
-    <header className="absolute top-0 left-0 right-0 flex justify-between items-center px-12 py-6">
-      {/* زر الرئيسية على اليمين */}
+      <header className="absolute top-0 left-0 right-0 flex justify-between items-center px-12 py-6">
+        {/* زر الرئيسية على اليمين */}
         <button
           onClick={() => navigate("/")}
           className="text-lg font-semibold text-[#0A6D8B] hover:text-[#18A4B8] transition ml-auto"
