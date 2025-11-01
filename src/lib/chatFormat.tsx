@@ -118,7 +118,7 @@ export const renderInline = (text: string, fallbackKeywords?: string): ReactNode
 /* ------------------------- Parser مرن للأقسام ------------------------- */
 export type ParsedSection = { title: string; paras: string[]; items: string[] };
 
-const bulletRegex = /^([•\-–—]|\d+[.)\-،]|[\u0660-\u0669]+[.)\-،])\s*/;
+const bulletRegex = /^([•\-–—]|\d+[.)\-،]|[\u0660-\u0669]+[.)\-،])\s*/; // يدعم الأرقام العربية
 
 const isHeading = (s: string) => {
   const clean = stripBoldMarkers(s.replace(/^#+\s*/, "")).replace(/[.:：]+$/, "").trim();
@@ -165,9 +165,9 @@ export function parseReply(text: string): ParsedSection[] {
   return sections.length ? sections : [{ title: "توصيات للأسرة", paras: lines, items: [] }];
 }
 
-/* -------------------- تلوين العناوين -------------------- */
+/* -------------------- تلوين العناوين (بدون أيقونات) -------------------- */
 export const colorClassForTitle = (title: string) => {
-  if (/^صباح/.test(title)) return "text-[#0A6D8B]";
+  if (/^صباح/.test(title)) return "text-[#0A6D8B]";      // أزرق أرمونيا
   if (/^مساء/.test(title) || /^تهدئة/.test(title)) return "text-purple-600";
   if (/^في المواقف/.test(title) || /^إذا/.test(title)) return "text-orange-600";
   return "text-[#0A6D8B]";
