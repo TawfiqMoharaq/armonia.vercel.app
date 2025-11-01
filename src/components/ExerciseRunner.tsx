@@ -22,7 +22,8 @@ export default function ExerciseRunner({ gif, title, onClose }: ExerciseRunnerPr
         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-[1.3fr_0.7fr] gap-4">
+
         {/* ✅ GIF يسار */}
         <div className="rounded-3xl shadow border bg-white flex items-center justify-center">
           <img
