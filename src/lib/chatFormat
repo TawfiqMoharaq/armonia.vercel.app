@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 
 /* ---------------------- أدوات بسيطة للنصوص والروابط ---------------------- */
 export const stripBoldMarkers = (text: string) =>
@@ -50,15 +50,17 @@ export const renderInline = (text: string, fallbackKeywords?: string): ReactNode
       const url = normalizeYoutubeLink(match, fallbackKeywords);
       if (offset > lastIndex) nodes.push(segment.slice(lastIndex, offset));
       nodes.push(
-        <a
-          key={`url-${nodes.length}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[#0A6D8B] underline decoration-dotted underline-offset-4"
-        >
-          {url}
-        </a>,
+        React.createElement(
+          "a",
+          {
+            key: `url-${nodes.length}`,
+            href: url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            className: "text-[#0A6D8B] underline decoration-dotted underline-offset-4",
+          },
+          url
+        )
       );
       lastIndex = offset + match.length;
       return match;
@@ -93,34 +95,40 @@ export const renderInline = (text: string, fallbackKeywords?: string): ReactNode
     if (earliest.type === "markdown") {
       const url = normalizeYoutubeLink(second, fallbackKeywords);
       nodes.push(
-        <a
-          key={`markdown-${nodes.length}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[#0A6D8B] underline decoration-dotted underline-offset-4 font-medium"
-        >
-          {first}
-        </a>,
+        React.createElement(
+          "a",
+          {
+            key: `markdown-${nodes.length}`,
+            href: url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            className: "text-[#0A6D8B] underline decoration-dotted underline-offset-4 font-medium",
+          },
+          first
+        )
       );
     } else if (earliest.type === "bold") {
       nodes.push(
-        <span key={`bold-${nodes.length}`} className="font-semibold text-[#0A6D8B]">
-          {stripBoldMarkers(first)}
-        </span>,
+        React.createElement(
+          "span",
+          { key: `bold-${nodes.length}`, className: "font-semibold text-[#0A6D8B]" },
+          stripBoldMarkers(first)
+        )
       );
     } else {
       const url = normalizeYoutubeLink(full, fallbackKeywords);
       nodes.push(
-        <a
-          key={`raw-${nodes.length}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[#0A6D8B] underline decoration-dotted underline-offset-4"
-        >
-          {url}
-        </a>,
+        React.createElement(
+          "a",
+          {
+            key: `raw-${nodes.length}`,
+            href: url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            className: "text-[#0A6D8B] underline decoration-dotted underline-offset-4",
+          },
+          url
+        )
       );
     }
     remaining = remaining.slice(earliest.match.index + full.length);
@@ -128,6 +136,7 @@ export const renderInline = (text: string, fallbackKeywords?: string): ReactNode
 
   return nodes.filter((node) => !(typeof node === "string" && node.length === 0));
 };
+
 
 /* ------------------------- Parser مرن للأقسام ------------------------- */
 export type ParsedSection = { title: string; paras: string[]; items: string[] };
