@@ -192,12 +192,6 @@ const renderChatReply = (text: string, fallbackKeywords?: string): ReactNode => 
     return t;
   };
 
-  const iconClass = (title: string) => {
-    if (/^صباح/.test(title)) return { icon: "", cls: "text-blue-600" };
-    if (/^مساء/.test(title)) return { icon: "", cls: "text-purple-600" };
-    if (/^في المواقف/.test(title) || /^إذا/.test(title)) return { icon: "", cls: "text-orange-600" };
-    return { icon: "✨", cls: "text-[#0A6D8B]" };
-  };
 
   const pushSection = () => {
     if (current) sections.push(current);
