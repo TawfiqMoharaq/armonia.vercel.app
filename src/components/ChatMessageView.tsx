@@ -1,64 +1,36 @@
-import React from "react";
-import ReactMarkdown from "react-markdown";
-import { cleanModelText } from "../utils/formatChat";
+// أدوات تنسيق وتنظيف ردود الشات
 
-type Props = { text: string; youtube?: string };
+// يحذف أي أسوار كود (بما فيها ```json ... ```)
+export const stripCodeFences = (t: string) =>
+  t.replace(/```json[\s\S]*?```/gi, "")
+   .replace(/```[\s\S]*?```/g, "");
 
-export default function ChatMessageView({ text, youtube }: Props) {
-  const pretty = cleanModelText(text);
+// يحاول إزالة كتل JSON غير المُسوّرة (احتياط)
+export const stripInlineJson = (t: string) => {
+  // يمسح كلمة "json" المنفصلة التي تزعج العرض
+  let out = t.replace(/\bjson\b/gi, "");
 
-  return (
-    <div className="rounded-2xl px-4 py-3 bg-white/80 shadow-sm border border-slate-200">
-      <div className="prose max-w-none prose-p:my-1 prose-li:my-0 prose-ul:my-2 prose-ol:my-2 text-[#0A6D8B]">
-        <ReactMarkdown
-          components={{
-            // لا نظهر بلوكات الكود
-            code: ({ children, inline, ...props }) =>
-              inline ? (
-                <code className="px-1 py-0.5 rounded bg-slate-100 text-[#0A6D8B]" {...props}>
-                  {children}
-                </code>
-              ) : (
-                <span className="font-normal" {...props} />
-              ),
-            h1: ({ children }) => <h3 className="text-lg font-bold mt-2 mb-1">{children}</h3>,
-            h2: ({ children }) => <h3 className="text-lg font-bold mt-2 mb-1">{children}</h3>,
-            h3: ({ children }) => <h4 className="text-base font-semibold mt-2 mb-1">{children}</h4>,
-            h4: ({ children }) => <h5 className="text-base font-semibold mt-2 mb-1">{children}</h5>,
-            ul: ({ children }) => <ul className="list-disc ms-6 space-y-1">{children}</ul>,
-            ol: ({ children }) => <ol className="list-decimal ms-6 space-y-1">{children}</ol>,
-            li: ({ children }) => <li className="leading-7">{children}</li>,
-            p: ({ children }) => <p className="leading-7">{children}</p>,
-            strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-            em: ({ children }) => <em className="opacity-90">{children}</em>,
-            a: ({ children, href }) => (
-              <a
-                href={href}
-                target="_blank"
-                rel="noreferrer"
-                className="underline decoration-dotted underline-offset-4 hover:opacity-80"
-              >
-                {children}
-              </a>
-            ),
-          }}
-        >
-          {pretty}
-        </ReactMarkdown>
-      </div>
+  // يمسح كتل تشبه JSON كبيرة (بين أقواس معقوفة متعددة الأسطر)
+  out = out.replace(/\{[\s\S]{20,}\}/g, "");
 
-      {youtube && (
-        <div className="mt-2">
-          <a
-            href={youtube}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 text-sm text-[#0A6D8B] font-medium hover:opacity-80"
-          >
-            🔗 فيديو مقترح على يوتيوب
-          </a>
-        </div>
-      )}
-    </div>
-  );
-}
+  // يمسح الأسطر التي تبدو كمفاتيح JSON مثل: "exercise": "Push-Ups"
+  out = out.replace(/^\s*"?[a-zA-Z0-9_]+"?\s*:\s*.+$/gm, "");
+
+  return out;
+};
+
+// تنظيف شامل: أزل أسوار الكود + أي JSON طائش + فرّغ المسافات
+export const cleanModelText = (t: string) => {
+  const noFences = stripCodeFences(t ?? "");
+  const noJson  = stripInlineJson(noFences);
+  return noJson.replace(/\n{3,}/g, "\n\n").trim();
+};
+
+// استخرج نص العرض من استجابة الـ API (توافق خلفي)
+export const pickUiText = (data: any): string => {
+  if (!data) return "";
+  if (typeof data.ui_text === "string" && data.ui_text.trim()) return data.ui_text;
+  if (typeof data.reply === "string"   && data.reply.trim())   return data.reply;
+  // أحيانًا المودل يرجّع JSON كنص؛ نحاول تنظيفه
+  return cleanModelText(String(data));
+};
