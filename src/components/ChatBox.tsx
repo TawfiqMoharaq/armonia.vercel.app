@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sendChat, type ChatPayload, type ChatResponse, type MuscleContext } from "../lib/api";
 import ChatMessageView from "./ChatMessageView";
-// 👇 إضافة دالة تنظيف روابط يوتيوب
-import { stripAllYoutubeLinks } from "../lib/chatFormat";
 
 type ChatRole = "user" | "assistant";
 interface ChatMessage { id: string; role: ChatRole; content: string; youtube?: string; error?: boolean; }
@@ -75,7 +73,6 @@ const EXERCISE_HINTS = ["سكوات","squat","bodyweight squat","lunge","لان�
 function extractSuggestedExercise(reply: string): string | null {
   if (!reply) return null;
 
-  // JSON داخل كود فينس
   const codeJsonMatch = reply.match(/```json([\s\S]*?)```/i);
   const rawJson = codeJsonMatch ? codeJsonMatch[1] : null;
 
@@ -114,7 +111,7 @@ export default function ChatBox({
 }: ChatBoxProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  ❶ const [sessionId, setSessionId] = useState<string | null>(null);
   const [isTyping, setIsTyping] = useState(false);
   const hasAutoStarted = useRef(false);
 
@@ -133,7 +130,6 @@ export default function ChatBox({
     if (stored) setSessionId(stored);
   }, [storageKey]);
 
-  // تصفير الجلسة عند تغير نتائج المجسّم (مع عضلات)
   useEffect(() => {
     if (!musclesContext || musclesContext.length === 0) return;
     setMessages([]);
@@ -167,13 +163,10 @@ export default function ChatBox({
         localStorage.setItem(storageKey, response.session_id);
 
         const youtubeLink = response.youtube && response.youtube.startsWith("http") ? response.youtube : yt;
-        const replyTextRaw = response.reply ?? "";
+        const replyText = response.reply ?? "";
 
-        const suggested = extractSuggestedExercise(replyTextRaw);
+        const suggested = extractSuggestedExercise(replyText);
         if (suggested && onSuggestedExercise) onSuggestedExercise(suggested);
-
-        // 👇 نظّف كل روابط يوتيوب من نص المساعد (نخلي رابط واحد فقط خارجياً)
-        const replyText = stripAllYoutubeLinks(replyTextRaw);
 
         setMessages((prev) => [...prev, { id: createId(), role: "assistant", content: replyText, youtube: youtubeLink }]);
       } catch (error: any) {
@@ -186,14 +179,12 @@ export default function ChatBox({
     [input, isTyping, musclesContext, sessionId, storageKey, onSuggestedExercise]
   );
 
-  // التشغيل التلقائي — لا يعمل إلا إذا فعّلته (autoStartAdvice)
   useEffect(() => {
     if (!autoStartAdvice || !musclesContext || musclesContext.length === 0 || hasAutoStarted.current) return;
     hasAutoStarted.current = true;
     void handleSend(autoStartPrompt ?? AUTOSTART_PROMPT);
   }, [autoStartAdvice, autoStartPrompt, handleSend, musclesContext]);
 
-  // إخفاء أول رسالة user (البرومبت التلقائي) في العرض فقط
   const visibleMessages = useMemo(() => {
     let skipped = false;
     return messages.filter((m) => {
