@@ -1,6 +1,7 @@
 // src/lib/chatFormat.ts
 import type { ReactNode } from "react";
 
+// ====== Helpers ======
 export const stripBoldMarkers = (text: string) =>
   text.replace(/\*\*(.+?)\*\*/g, "$1").trim();
 
@@ -24,101 +25,70 @@ export const normalizeYoutubeLink = (url: string, fallbackKeywords?: string) => 
   return url;
 };
 
+// ===== Inline formatter =====
 export const renderInline = (text: string, fallbackKeywords?: string): ReactNode[] => {
   const nodes: ReactNode[] = [];
   let remaining = text;
 
   const pushPlain = (segment: string) => {
     if (!segment) return;
-    const urlPattern = /(https?:\/\/[^\s\)]+)/g;
+    const urlRegex = /(https?:\/\/[^\s)]+)/g;
     let lastIndex = 0;
-    segment.replace(urlPattern, (match, _p1, offset) => {
-      const url = normalizeYoutubeLink(match, fallbackKeywords);
+
+    segment.replace(urlRegex, (url, _m, offset) => {
       if (offset > lastIndex) nodes.push(segment.slice(lastIndex, offset));
+      const normalized = normalizeYoutubeLink(url, fallbackKeywords);
       nodes.push(
         <a
           key={`url-${nodes.length}`}
-          href={url}
+          href={normalized}
           target="_blank"
           rel="noopener noreferrer"
           className="text-[#0A6D8B] underline decoration-dotted underline-offset-4"
         >
-          {url}
-        </a>,
+          رابط يوتيوب مناسب
+        </a>
       );
-      lastIndex = offset + match.length;
-      return match;
+      lastIndex = offset + url.length;
+      return "";
     });
+
     if (lastIndex < segment.length) nodes.push(segment.slice(lastIndex));
   };
 
   while (remaining.length) {
-    const markdownMatch = /\[([^\]]+)\]\s*\((https?:\/\/[^\s)]+)\)/.exec(remaining);
-    const boldMatch = /\*\*(.+?)\*\*/.exec(remaining);
-    const urlMatch = /(https?:\/\/[^\s\)]+)/.exec(remaining);
-
-    const matches = [
-      markdownMatch ? { type: "markdown" as const, match: markdownMatch } : null,
-      boldMatch ? { type: "bold" as const, match: boldMatch } : null,
-      urlMatch ? { type: "url" as const, match: urlMatch } : null,
-    ].filter(Boolean) as Array<{ type: "markdown" | "bold" | "url"; match: RegExpExecArray }>;
-
-    if (!matches.length) {
+    const urlMatch = /(https?:\/\/[^\s)]+)/.exec(remaining);
+    if (!urlMatch) {
       pushPlain(remaining);
       break;
     }
-
-    const earliest = matches.reduce((prev, current) =>
-      current!.match.index < prev!.match.index ? current! : prev!,
-    )!;
-
-    if (earliest.match.index > 0) pushPlain(remaining.slice(0, earliest.match.index));
-
-    const [full, first, second] = earliest.match;
-
-    if (earliest.type === "markdown") {
-      const url = normalizeYoutubeLink(second, fallbackKeywords);
-      nodes.push(
-        <a
-          key={`markdown-${nodes.length}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[#0A6D8B] underline decoration-dotted underline-offset-4 font-medium"
-        >
-          {first}
-        </a>,
-      );
-    } else if (earliest.type === "bold") {
-      nodes.push(
-        <span key={`bold-${nodes.length}`} className="font-semibold text-[#0A6D8B]">
-          {stripBoldMarkers(first)}
-        </span>,
-      );
-    } else {
-      const url = normalizeYoutubeLink(full, fallbackKeywords);
-      nodes.push(
-        <a
-          key={`raw-${nodes.length}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[#0A6D8B] underline decoration-dotted underline-offset-4"
-        >
-          {url}
-        </a>,
-      );
+    if (urlMatch.index > 0) {
+      pushPlain(remaining.slice(0, urlMatch.index));
     }
-    remaining = remaining.slice(earliest.match.index + full.length);
+    const url = urlMatch[1];
+    const normalized = normalizeYoutubeLink(url, fallbackKeywords);
+    nodes.push(
+      <a
+        key={`raw-${nodes.length}`}
+        href={normalized}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-[#0A6D8B] underline decoration-dotted underline-offset-4"
+      >
+        رابط يوتيوب مناسب
+      </a>
+    );
+    remaining = remaining.slice(urlMatch.index + url.length);
   }
 
-  return nodes.filter((node) => !(typeof node === "string" && node.length === 0));
+  return nodes;
 };
 
-// ====== Parser مرن لا يعتمد على البرمبت ======
+// ===== Parser =====
+
 export type ParsedSection = { title: string; paras: string[]; items: string[] };
 
-const bulletRegex = /^([•\-–—]|\d+[.)\-،]|[\u0660-\u0669]+[.)\-،])\s*/; // يدعم أرقام عربية
+const bulletRegex = /^([•\-–—]|\d+[.)\-،]|[\u0660-\u0669]+[.)\-،])\s*/;
 
 const isHeading = (s: string) => {
   const clean = stripBoldMarkers(s.replace(/^#+\s*/, "")).replace(/[.:：]+$/, "").trim();
@@ -126,17 +96,24 @@ const isHeading = (s: string) => {
     /^صباح/.test(clean) || /^مساء/.test(clean) || /^تهدئة/.test(clean) ||
     /^في المواقف/.test(clean) || /^المواقف/.test(clean) ||
     /^إذا/.test(clean) || /^نصائح/.test(clean) || /^روابط/.test(clean) ||
-    /^(Power\s*Up|Cooldown|Routine)/i.test(clean) ||
-    /^\*\*(.+)\*\*$/.test(s)
+    /^(Power\s*Up|Cooldown|Routine)/i.test(clean)
   );
 };
 
-const normalizeTitle = (s: string) => {
+export const normalizeTitle = (s: string) => {
   const t = stripBoldMarkers(s.replace(/^#+\s*/, "")).replace(/[.:：]+$/, "").trim();
   if (/Power\s*Up/i.test(t)) return "صباحًا (Power Up)";
   if (/Cooldown/i.test(t) || /^تهدئة/.test(t) || /^مساء/.test(t)) return "مساءً (تهدئة)";
-  if (/^المواقف/.test(t)) return "في المواقف الصعبة";
+  if (/^المواقف/.test(t) || /^في المواقف/.test(t)) return "في المواقف الصعبة";
   return t;
+};
+
+// ✅ كل عنوان لون مختلف حسب نوعه
+export const iconAndClass = (title: string) => {
+  if (/^صباح/.test(title)) return { cls: "text-[#00A6A6]" }; // تركواز
+  if (/^مساء/.test(title) || /^تهدئة/.test(title)) return { cls: "text-[#7E60BF]" }; // بنفسجي هادئ
+  if (/^في المواقف/.test(title) || /^إذا/.test(title)) return { cls: "text-[#E07A3F]" }; // برتقالي
+  return { cls: "text-[#0A6D8B]" }; // لون Armonia الأساسي
 };
 
 export function parseReply(text: string): ParsedSection[] {
@@ -152,11 +129,13 @@ export function parseReply(text: string): ParsedSection[] {
       current = { title: normalizeTitle(line), paras: [], items: [] };
       return;
     }
+
     if (bulletRegex.test(line)) {
       current ??= { title: "توصيات", paras: [], items: [] };
       current.items.push(stripBoldMarkers(line.replace(bulletRegex, "")));
       return;
     }
+
     current ??= { title: "توصيات", paras: [], items: [] };
     current.paras.push(stripBoldMarkers(line));
   });
@@ -164,10 +143,3 @@ export function parseReply(text: string): ParsedSection[] {
   push();
   return sections.length ? sections : [{ title: "توصيات", paras: lines, items: [] }];
 }
-
-export const iconAndClass = (title: string) => {
-  if (/^صباح/.test(title)) return { icon: "", cls: "text-blue-600" };
-  if (/^مساء/.test(title) || /^تهدئة/.test(title)) return { icon: "", cls: "text-purple-600" };
-  if (/^في المواقف/.test(title) || /^إذا/.test(title)) return { icon: "", cls: "text-orange-600" };
-  return { icon: "✨", cls: "text-[#0A6D8B]" };
-};
