@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from urllib.parse import quote_plus
 from uuid import uuid4
 
@@ -34,19 +34,18 @@ def _parse_origins(origin_setting: str) -> List[str]:
     return [origin.strip() for origin in origin_setting.split(",") if origin.strip()]
 
 
-# ✅ CORS باستخدام regex (Vercel + Localhost)
+# بدّل الكتلة الحالية بهذا السطرين:
 origin_regex = r"https://.*vercel\.app$|http://localhost:5173"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=origin_regex,
+    allow_origin_regex=origin_regex,  # ← استخدم regex بدل allow_origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# =============================== نماذج البيانات ===============================
 
 class Muscle(BaseModel):
     muscle_ar: str
@@ -88,8 +87,6 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     results: List[Muscle]
 
-
-# ============================== جلسات المحادثة ===============================
 
 SESSIONS: Dict[str, List[Dict[str, str]]] = {}
 SESSIONS_LOCK = asyncio.Lock()
@@ -140,7 +137,7 @@ def _youtube_link(context: ChatContext) -> str:
 
 
 def _fallback_message(user_message: str, youtube: str) -> str:
-    text = (user_message or "").lower()
+    text = user_message.lower()
     if "سلام" in text:
         prefix = "وعليكم السلام! السيرفر مو متصل حالياً."
     elif "?" in user_message:
@@ -167,8 +164,6 @@ async def _get_history(session_id: str) -> List[Dict[str, str]]:
         return list(history)
 
 
-# ================================== Health ===================================
-
 @app.get("/health")
 async def health() -> Dict[str, object]:
     return {
@@ -178,143 +173,22 @@ async def health() -> Dict[str, object]:
     }
 
 
-# ============================== Helpers للتحليل ===============================
-
-def _bm_items_for_side(side_key: str) -> List[dict]:
-    """يرجع عناصر BODY_MAP[side].items إن أمكن."""
-    try:
-        side_map = BODY_MAP.get(side_key) or {}
-        items = side_map.get("items") or side_map.get("ITEMS") or []
-        if isinstance(items, list):
-            return items
-    except Exception:
-        pass
-    return []
-
-
-def _lookup_by_en(side_key: str, name_en: str) -> tuple[str, str]:
-    """
-    يحاول إيجاد (muscle_ar, region) عبر name_en ضمن BODY_MAP للجهة،
-    ثم الجهة الأخرى إن فشل. عند الفشل يرجّع (name_en, "").
-    """
-    name_en_l = (name_en or "").strip().lower()
-    # الجهة نفسها
-    for it in _bm_items_for_side(side_key):
-        if str(it.get("name_en", "")).strip().lower() == name_en_l:
-            return (it.get("name_ar") or name_en, it.get("region") or "")
-    # الجهة الأخرى
-    other = "back" if side_key == "front" else "front"
-    for it in _bm_items_for_side(other):
-        if str(it.get("name_en", "")).strip().lower() == name_en_l:
-            return (it.get("name_ar") or name_en, it.get("region") or "")
-    # فشل
-    return (name_en or "", "")
-
-
-def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
-    """
-    يحوّل item بأي صيغة إلى Muscle:
-      - dict: يدعم مفاتيح muscle_ar/name_ar/ar, muscle_en/name_en/en, region, prob/score/p
-      - tuple/list: (en, prob) أو (en, region, prob)
-      - str: تعتبر muscle_en
-    """
-    try:
-        # dict
-        if isinstance(item, dict):
-            ar = item.get("muscle_ar") or item.get("name_ar") or item.get("ar") or ""
-            en = item.get("muscle_en") or item.get("name_en") or item.get("en") or ""
-            region = item.get("region") or ""
-            prob_val = item.get("prob", item.get("score", item.get("p", 0.0)))
-            try:
-                prob = float(prob_val)
-            except Exception:
-                prob = 0.0
-            if not ar or not region:
-                ar2, reg2 = _lookup_by_en(side_key, en or ar)
-                ar = ar or ar2
-                region = region or reg2
-            if not (ar or en):
-                return None
-            return Muscle(
-                muscle_ar=ar or en,
-                muscle_en=en or ar,
-                region=region or "",
-                prob=max(0.0, min(prob, 1.0)),
-            )
-
-        # tuple/list: (en, prob) أو (en, region, prob)
-        if isinstance(item, (list, tuple)) and len(item) >= 1:
-            en = str(item[0] or "")
-            region = ""
-            prob = 0.0
-            if len(item) == 2:
-                try:
-                    prob = float(item[1] or 0.0)
-                except Exception:
-                    prob = 0.0
-            elif len(item) >= 3:
-                region = str(item[1] or "")
-                try:
-                    prob = float(item[2] or 0.0)
-                except Exception:
-                    prob = 0.0
-            ar, reg2 = _lookup_by_en(side_key, en)
-            region = region or reg2
-            return Muscle(
-                muscle_ar=ar or en,
-                muscle_en=en,
-                region=region or "",
-                prob=max(0.0, min(prob, 1.0)),
-            )
-
-        # string: اعتبرها muscle_en
-        if isinstance(item, str):
-            en = item
-            ar, region = _lookup_by_en(side_key, en)
-            return Muscle(
-                muscle_ar=ar or en,
-                muscle_en=en,
-                region=region or "",
-                prob=0.0,
-            )
-
-    except Exception as exc:
-        logger.exception("Failed to coerce muscle item: %r", exc)
-
-    return None
-
-
-# ================================ Analyze API ================================
-
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
-    """
-    يُرجع نتائج موحّدة حتى لو تغيّر شكل مخرجات analyze_selection
-    (list[dict]/list[str]/list[tuple]/dict يحتوي على 'results'/غير ذلك).
-    """
-    raw = analyze_selection(
+    results = analyze_selection(
         payload.side, payload.circle.cx, payload.circle.cy, payload.circle.radius
     )
-
-    # قد يرجع dict فيه 'results' أو مباشرة list
-    if isinstance(raw, dict) and "results" in raw:
-        raw_list = raw.get("results", [])
-    else:
-        raw_list = raw
-
-    if not isinstance(raw_list, list):
-        raw_list = []
-
-    muscles: List[Muscle] = []
-    for item in raw_list:
-        m = _coerce_item_to_muscle(payload.side, item)
-        if m:
-            muscles.append(m)
-
+    muscles = [
+        Muscle(
+            muscle_ar=item["muscle_ar"],
+            muscle_en=item["muscle_en"],
+            region=item["region"],
+            prob=float(item["prob"]),
+        )
+        for item in results
+    ]
     return AnalyzeResponse(results=muscles)
 
-
-# ================================ Chat Helpers ===============================
 
 async def _handle_chat(payload: ChatRequest) -> ChatResponse:
     session_id = payload.session_id or uuid4().hex
@@ -361,8 +235,6 @@ async def _handle_chat(payload: ChatRequest) -> ChatResponse:
         youtube=youtube,
     )
 
-
-# ================================= Chat APIs =================================
 
 @app.post("/api/chat/send", response_model=ChatResponse)
 async def send_chat(payload: ChatRequest) -> ChatResponse:
