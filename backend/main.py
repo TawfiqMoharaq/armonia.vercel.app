@@ -181,6 +181,7 @@ async def health() -> Dict[str, object]:
 # ============================== Helpers للتحليل ===============================
 
 def _bm_items_for_side(side_key: str) -> List[dict]:
+    """يرجع عناصر BODY_MAP[side].items إن أمكن."""
     try:
         side_map = BODY_MAP.get(side_key) or {}
         items = side_map.get("items") or side_map.get("ITEMS") or []
@@ -192,19 +193,33 @@ def _bm_items_for_side(side_key: str) -> List[dict]:
 
 
 def _lookup_by_en(side_key: str, name_en: str) -> tuple[str, str]:
+    """
+    يحاول إيجاد (muscle_ar, region) عبر name_en ضمن BODY_MAP للجهة،
+    ثم الجهة الأخرى إن فشل. عند الفشل يرجّع (name_en, "").
+    """
     name_en_l = (name_en or "").strip().lower()
+    # الجهة نفسها
     for it in _bm_items_for_side(side_key):
         if str(it.get("name_en", "")).strip().lower() == name_en_l:
             return (it.get("name_ar") or name_en, it.get("region") or "")
+    # الجهة الأخرى
     other = "back" if side_key == "front" else "front"
     for it in _bm_items_for_side(other):
         if str(it.get("name_en", "")).strip().lower() == name_en_l:
             return (it.get("name_ar") or name_en, it.get("region") or "")
+    # فشل
     return (name_en or "", "")
 
 
 def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
+    """
+    يحوّل item بأي صيغة إلى Muscle:
+      - dict: يدعم مفاتيح muscle_ar/name_ar/ar, muscle_en/name_en/en, region, prob/score/p
+      - tuple/list: (en, prob) أو (en, region, prob)
+      - str: تعتبر muscle_en
+    """
     try:
+        # dict
         if isinstance(item, dict):
             ar = item.get("muscle_ar") or item.get("name_ar") or item.get("ar") or ""
             en = item.get("muscle_en") or item.get("name_en") or item.get("en") or ""
@@ -226,6 +241,8 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
                 region=region or "",
                 prob=max(0.0, min(prob, 1.0)),
             )
+
+        # tuple/list: (en, prob) أو (en, region, prob)
         if isinstance(item, (list, tuple)) and len(item) >= 1:
             en = str(item[0] or "")
             region = ""
@@ -249,6 +266,8 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
                 region=region or "",
                 prob=max(0.0, min(prob, 1.0)),
             )
+
+        # string: اعتبرها muscle_en
         if isinstance(item, str):
             en = item
             ar, region = _lookup_by_en(side_key, en)
@@ -258,6 +277,7 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
                 region=region or "",
                 prob=0.0,
             )
+
     except Exception as exc:
         logger.exception("Failed to coerce muscle item: %r", exc)
 
@@ -268,13 +288,20 @@ def _coerce_item_to_muscle(side_key: str, item: Any) -> Optional[Muscle]:
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
+    """
+    يُرجع نتائج موحّدة حتى لو تغيّر شكل مخرجات analyze_selection
+    (list[dict]/list[str]/list[tuple]/dict يحتوي على 'results'/غير ذلك).
+    """
     raw = analyze_selection(
         payload.side, payload.circle.cx, payload.circle.cy, payload.circle.radius
     )
+
+    # قد يرجع dict فيه 'results' أو مباشرة list
     if isinstance(raw, dict) and "results" in raw:
         raw_list = raw.get("results", [])
     else:
         raw_list = raw
+
     if not isinstance(raw_list, list):
         raw_list = []
 
