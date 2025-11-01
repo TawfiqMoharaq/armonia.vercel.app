@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { sendChat, type ChatPayload, type ChatResponse, type MuscleContext } from "../lib/api";
-import { ChatMessageView } from "./ChatMessageView";
+import ChatMessageView from "./ChatMessageView";
 import { cleanModelText } from "../utils/formatChat";
 
 type ChatRole = "user" | "assistant";
